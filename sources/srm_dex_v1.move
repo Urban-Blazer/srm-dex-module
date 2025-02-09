@@ -703,21 +703,29 @@ fun calc_burn_swap_out_b(
         };
     }
 
+    /// Create a pool using only a **specified amount** from the provided coin objects.
     public fun create_pool_with_coins<A, B>(
         factory: &mut Factory,
-        init_a: Coin<A>,
-        init_b: Coin<B>,
+        mut init_a: Coin<A>,
+        amount_a: u64,
+        mut init_b: Coin<B>,
+        amount_b: u64,
         lp_builder_fee: u64,
         burn_fee: u64,
         dev_royalty_fee: u64,
         rewards_fee: u64,
         dev_wallet: address,
         ctx: &mut TxContext
-    ): Coin<LP<A, B>> {
+    ): (Coin<A>, Coin<B>, Coin<LP<A, B>>) { // ✅ Return remaining balances
+    // ✅ Split coins into specified amounts
+    let used_a = coin::split(&mut init_a, amount_a, ctx);
+    let used_b = coin::split(&mut init_b, amount_b, ctx);
+
+
         let lp_balance = create_pool(
             factory,
-            coin::into_balance(init_a),
-            coin::into_balance(init_b),
+            coin::into_balance(used_a), // ✅ Use the split amount
+        coin::into_balance(used_b), // ✅ Use the split amount
             lp_builder_fee,
             burn_fee,
             dev_royalty_fee,
@@ -726,13 +734,16 @@ fun calc_burn_swap_out_b(
             ctx
         );
 
-        coin::from_balance(lp_balance, ctx)
+        // ✅ Return the remaining coin balances to the user
+        (init_a, init_b, coin::from_balance(lp_balance, ctx))
     }
 
     public entry fun create_pool_with_coins_and_transfer_lp_to_sender<A, B>(
         factory: &mut Factory,
-        init_a: Coin<A>,
-        init_b: Coin<B>,
+        mut init_a: Coin<A>,
+        amount_a: u64,
+        mut init_b: Coin<B>,
+        amount_b: u64,
         lp_builder_fee: u64,
         burn_fee: u64,
         dev_royalty_fee: u64,
@@ -740,10 +751,16 @@ fun calc_burn_swap_out_b(
         dev_wallet: address,
         ctx: &mut TxContext
     ) {
+
+        // ✅ Split coins into specified amounts
+    let used_a = coin::split(&mut init_a, amount_a, ctx);
+    let used_b = coin::split(&mut init_b, amount_b, ctx);
+
+
         let lp_balance = create_pool(
             factory,
-            coin::into_balance(init_a),
-            coin::into_balance(init_b),
+            coin::into_balance(used_a), // ✅ Use the split amount
+        coin::into_balance(used_b), // ✅ Use the split amount
             lp_builder_fee,
             burn_fee,
             dev_royalty_fee,
@@ -751,8 +768,18 @@ fun calc_burn_swap_out_b(
             dev_wallet,
             ctx
         );
+        let sender_addr = sender(ctx);
 
-        transfer::public_transfer(coin::from_balance(lp_balance, ctx), sender(ctx));
+
+    // ✅ Return remaining balances to sender
+    let remaining_a = coin::into_balance(init_a);
+let remaining_b = coin::into_balance(init_b);
+destroy_zero_or_transfer_balance(remaining_a, sender_addr, ctx);
+destroy_zero_or_transfer_balance(remaining_b, sender_addr, ctx);
+
+
+    // ✅ Transfer LP tokens to sender
+    transfer::public_transfer(coin::from_balance(lp_balance, ctx), sender_addr);
     }
 
     public fun add_liquidity_with_coins<A, B>(pool: &mut Pool<A, B>, input_a: Coin<A>, input_b: Coin<B>, min_lp_out: u64, ctx: &mut TxContext): (Coin<A>, Coin<B>, Coin<LP<A, B>>) {
