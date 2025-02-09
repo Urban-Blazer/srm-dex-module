@@ -231,7 +231,7 @@ public fun get_pool_info<A, B>(pool: &Pool<A, B>): (
         balance::value(&pool.dev_balance_a),
         balance::value(&pool.reward_balance_a),
 
-        pool.dev_wallet // ✅ Added dev wallet address
+        pool.dev_wallet
     )
 }
 
@@ -759,16 +759,16 @@ fun calc_burn_swap_out_b(
         rewards_fee: u64,
         dev_wallet: address,
         ctx: &mut TxContext
-    ): (Coin<A>, Coin<B>, Coin<LP<A, B>>) { // ✅ Return remaining balances
-    // ✅ Split coins into specified amounts
+    ): (Coin<A>, Coin<B>, Coin<LP<A, B>>) { 
+    // Split coins into specified amounts
     let used_a = coin::split(&mut init_a, amount_a, ctx);
     let used_b = coin::split(&mut init_b, amount_b, ctx);
 
 
         let lp_balance = create_pool(
             factory,
-            coin::into_balance(used_a), // ✅ Use the split amount
-        coin::into_balance(used_b), // ✅ Use the split amount
+            coin::into_balance(used_a), 
+        coin::into_balance(used_b), 
             lp_builder_fee,
             burn_fee,
             dev_royalty_fee,
@@ -777,7 +777,7 @@ fun calc_burn_swap_out_b(
             ctx
         );
 
-        // ✅ Return the remaining coin balances to the user
+        // Return the remaining coin balances to the user
         (init_a, init_b, coin::from_balance(lp_balance, ctx))
     }
 
@@ -795,15 +795,15 @@ fun calc_burn_swap_out_b(
         ctx: &mut TxContext
     ) {
 
-        // ✅ Split coins into specified amounts
+        // Split coins into specified amounts
     let used_a = coin::split(&mut init_a, amount_a, ctx);
     let used_b = coin::split(&mut init_b, amount_b, ctx);
 
 
         let lp_balance = create_pool(
             factory,
-            coin::into_balance(used_a), // ✅ Use the split amount
-        coin::into_balance(used_b), // ✅ Use the split amount
+            coin::into_balance(used_a), 
+        coin::into_balance(used_b),
             lp_builder_fee,
             burn_fee,
             dev_royalty_fee,
@@ -814,14 +814,14 @@ fun calc_burn_swap_out_b(
         let sender_addr = sender(ctx);
 
 
-    // ✅ Return remaining balances to sender
+    // Return remaining balances to sender
     let remaining_a = coin::into_balance(init_a);
 let remaining_b = coin::into_balance(init_b);
 destroy_zero_or_transfer_balance(remaining_a, sender_addr, ctx);
 destroy_zero_or_transfer_balance(remaining_b, sender_addr, ctx);
 
 
-    // ✅ Transfer LP tokens to sender
+    // Transfer LP tokens to sender
     transfer::public_transfer(coin::from_balance(lp_balance, ctx), sender_addr);
     }
 
