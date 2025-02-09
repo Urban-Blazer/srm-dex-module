@@ -7,6 +7,7 @@ module srm_dex_v1::srmV1 {
     use std::ascii;
     use sui::table::{Self, Table};
     use sui::tx_context::sender;
+    use sui::clock::Clock;
 
     /* === errors === */
 
@@ -57,6 +58,10 @@ module srm_dex_v1::srmV1 {
         if (a == 0) 0 else (a - 1) / b + 1
     }
 
+    fun get_timestamp(clock: &sui::clock::Clock): u64 {
+        sui::clock::timestamp_ms(clock)
+    }
+
     /* === events === */
 
     public struct PoolCreated has copy, drop {
@@ -96,12 +101,14 @@ module srm_dex_v1::srmV1 {
     }
 
     public struct Swapped has copy, drop {
-        pool_id: ID,
-        tokenin: TypeName,
-        amountin: u64,
-        tokenout: TypeName,
-        amountout: u64,
-    }
+    pool_id: ID,
+    wallet: address,
+    tokenin: TypeName,
+    amountin: u64,
+    tokenout: TypeName,
+    amountout: u64,
+    timestamp: u64
+}
 
     /* === LP witness === */
 
@@ -134,8 +141,8 @@ module srm_dex_v1::srmV1 {
     }
 
     public fun get_pool_fees<A, B>(pool: &Pool<A, B>): (u64, u64, u64, u64) {
-    (pool.lp_builder_fee, pool.burn_fee, pool.dev_royalty_fee, pool.rewards_fee)
-}
+        (pool.lp_builder_fee, pool.burn_fee, pool.dev_royalty_fee, pool.rewards_fee)
+    }
 
     /* === Factory === */
 
@@ -390,7 +397,9 @@ module srm_dex_v1::srmV1 {
     public fun swap_a_for_b<A, B>(
     pool: &mut Pool<A, B>, 
     input: Balance<A>, 
-    min_out: u64
+    min_out: u64,
+    clock: &Clock,
+    ctx: &mut TxContext
 ): Balance<B> {
     assert!(balance::value(&input) > 0, EZeroInput);
     assert!(balance::value(&pool.balance_a) > 0 && balance::value(&pool.balance_b) > 0, ENoLiquidity);
@@ -427,12 +436,17 @@ module srm_dex_v1::srmV1 {
     balance::join(&mut pool.dev_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
     balance::join(&mut pool.reward_balance_a, balance::split(&mut pool.balance_a, reward_fee_amount));
 
+    let user_wallet = sender(ctx);
+    let timestamp = get_timestamp(clock);
+
     event::emit(Swapped {
         pool_id: object::id(pool),
+        wallet: user_wallet, 
         tokenin: type_name::get<A>(),
         amountin: input_amount,
         tokenout: type_name::get<B>(),
         amountout: final_out_b,
+        timestamp: timestamp
     });
 
     // Return the final output balance
@@ -442,7 +456,9 @@ module srm_dex_v1::srmV1 {
     public fun swap_b_for_a<A, B>(
     pool: &mut Pool<A, B>, 
     input: Balance<B>, 
-    min_out: u64
+    min_out: u64,
+    clock: &Clock,
+    ctx: &mut TxContext
 ): Balance<A> {
     assert!(balance::value(&input) > 0, EZeroInput);
     assert!(balance::value(&pool.balance_a) > 0 && balance::value(&pool.balance_b) > 0, ENoLiquidity);
@@ -472,18 +488,23 @@ module srm_dex_v1::srmV1 {
 
     balance::join(&mut pool.balance_b, input);
 
-    // ✅ **Now correctly distributing swap fees**
+    // **Now correctly distributing swap fees**
     balance::join(&mut pool.swap_balance_a, balance::split(&mut pool.balance_a, swap_fee_amount));
     balance::join(&mut pool.burn_balance_a, balance::split(&mut pool.balance_a, burn_fee_amount));
     balance::join(&mut pool.dev_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
     balance::join(&mut pool.reward_balance_a, balance::split(&mut pool.balance_a, reward_fee_amount));
 
+    let user_wallet = sender(ctx);        
+    let timestamp = get_timestamp(clock); 
+
     event::emit(Swapped {
         pool_id: object::id(pool),
+        wallet: user_wallet,
         tokenin: type_name::get<B>(),
         amountin: input_amount,
         tokenout: type_name::get<A>(),
         amountout: final_out_a,
+        timestamp: timestamp
     });
 
     balance::split(&mut pool.balance_a, final_out_a)
@@ -497,7 +518,7 @@ module srm_dex_v1::srmV1 {
     burn_fee: u64,
     dev_royalty_fee: u64,
     rewards_fee: u64
-): (u64, u64, u64, u64, u64, u64, u64) { // ✅ Now returns 7 values instead of 8
+): (u64, u64, u64, u64, u64, u64, u64) { // Now returns 7 values instead of 8
     // Step 1: Apply 50% of LP builder fee on `input_amount_b`
     let lp_builder_fee_amount_in = ceil_muldiv(input_amount_b, lp_builder_fee, 2 * BASIS_POINTS);
     let adjusted_amount_in_b = input_amount_b - lp_builder_fee_amount_in;
@@ -543,7 +564,7 @@ module srm_dex_v1::srmV1 {
     burn_fee: u64,
     dev_royalty_fee: u64,
     rewards_fee: u64
-): (u64, u64, u64, u64, u64, u64, u64) { // ✅ Now returns 7 values instead of 8
+): (u64, u64, u64, u64, u64, u64, u64) { // Now returns 7 values instead of 8
     // Step 1: Calculate all fees on `input_amount_a`
     let swap_fee_amount = ceil_muldiv(input_amount_a, SWAP_FEE, BASIS_POINTS);
     let burn_fee_amount = ceil_muldiv(input_amount_a, burn_fee, BASIS_POINTS);
@@ -673,26 +694,52 @@ module srm_dex_v1::srmV1 {
         destroy_zero_or_transfer_balance(b_out, sender, ctx);
     }
 
-    public fun swap_a_for_b_with_coin<A, B>(pool: &mut Pool<A, B>, input: Coin<A>, min_out: u64, ctx: &mut TxContext): Coin<B> {
-        let b_out = swap_a_for_b(pool, coin::into_balance(input), min_out);
+    public fun swap_a_for_b_with_coin<A, B>(
+    pool: &mut Pool<A, B>, 
+    input: Coin<A>, 
+    min_out: u64, 
+    clock: &Clock,
+    ctx: &mut TxContext
+): Coin<B> {
+    let b_out = swap_a_for_b(pool, coin::into_balance(input), min_out, clock, ctx);
 
-        coin::from_balance(b_out, ctx)
-    }
+    coin::from_balance(b_out, ctx)
+}
 
-    public entry fun swap_a_for_b_with_coin_and_transfer_to_sender<A, B>(pool: &mut Pool<A, B>, input: Coin<A>, min_out: u64, ctx: &mut TxContext) {
-        let b_out = swap_a_for_b(pool, coin::into_balance(input), min_out);
-        transfer::public_transfer(coin::from_balance(b_out, ctx), sender(ctx));
-    }
+    public entry fun swap_a_for_b_with_coin_and_transfer_to_sender<A, B>(
+    pool: &mut Pool<A, B>, 
+    input: Coin<A>, 
+    min_out: u64, 
+    clock: &Clock,
+    ctx: &mut TxContext
+) {
+    let b_out = swap_a_for_b(pool, coin::into_balance(input), min_out, clock, ctx);
+    transfer::public_transfer(coin::from_balance(b_out, ctx), sender(ctx));
+}
 
-    public fun swap_b_for_a_with_coin<A, B>(pool: &mut Pool<A, B>, input: Coin<B>, min_out: u64, ctx: &mut TxContext): Coin<A> {
-        let a_out = swap_b_for_a(pool, coin::into_balance(input), min_out);
+    public fun swap_b_for_a_with_coin<A, B>(
+    pool: &mut Pool<A, B>, 
+    input: Coin<B>, 
+    min_out: u64, 
+    clock: &Clock,
+    ctx: &mut TxContext
+): Coin<A> {
+    let a_out = swap_b_for_a(pool, coin::into_balance(input), min_out, clock, ctx);
 
-        coin::from_balance(a_out, ctx)
-    }
+    coin::from_balance(a_out, ctx)
+}
 
-    public entry fun swap_b_for_a_with_coin_and_transfer_to_sender<A, B>(pool: &mut Pool<A, B>, input: Coin<B>, min_out: u64, ctx: &mut TxContext) {
-        let a_out = swap_b_for_a(pool, coin::into_balance(input), min_out);
-        transfer::public_transfer(coin::from_balance(a_out, ctx), sender(ctx));
-    }
+
+    public entry fun swap_b_for_a_with_coin_and_transfer_to_sender<A, B>(
+    pool: &mut Pool<A, B>, 
+    input: Coin<B>, 
+    min_out: u64, 
+    clock: &Clock,
+    ctx: &mut TxContext
+) {
+    let a_out = swap_b_for_a(pool, coin::into_balance(input), min_out, clock, ctx);
+    transfer::public_transfer(coin::from_balance(a_out, ctx), sender(ctx));
+}
+
 
 }
