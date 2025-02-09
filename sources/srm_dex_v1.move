@@ -134,66 +134,58 @@ module srm_dex_v1::srmV1 {
 
     /// Distributes accumulated dev royalty fees to the developer wallet.
     public fun distribute_dev_royalty_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, ctx: &mut TxContext) {
-    let dev_balance = balance::value(&pool.dev_balance_a);
+        let dev_balance = balance::value(&pool.dev_balance_a);
 
-    if (dev_balance >= DEV_ROYALTY_FEE_THRESHOLD) {
-        let dev_wallet = pool.dev_wallet;
-        let dev_funds = balance::split(&mut pool.dev_balance_a, dev_balance);
+        if (dev_balance >= DEV_ROYALTY_FEE_THRESHOLD) {
+            let dev_wallet = pool.dev_wallet;
+            let dev_funds = balance::split(&mut pool.dev_balance_a, dev_balance);
 
-        transfer::public_transfer(coin::from_balance(dev_funds, ctx), dev_wallet);
+            transfer::public_transfer(coin::from_balance(dev_funds, ctx), dev_wallet);
 
-        // ✅ Ensure correct syntax for event emission
-        event::emit(DevRoyaltyFeeDistributed {
-            pool_id: object::id(pool),
-            dev_wallet: dev_wallet,  // Use `dev_wallet` from pool
-            amount: dev_balance,
-            timestamp: get_timestamp(clock) // ✅ Ensure `clock` is passed correctly
-        });
+            event::emit(DevRoyaltyFeeDistributed {
+                pool_id: object::id(pool),
+                dev_wallet: dev_wallet,
+                amount: dev_balance,
+                timestamp: get_timestamp(clock)
+            });
+        }
     }
-}
 
     /// Burns accumulated fees by swapping `burn_balance_a` for `balance_b` and burning `balance_b`.
-   public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, ctx: &mut TxContext) {
-    let burn_balance_a = balance::value(&pool.burn_balance_a);
+    public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, ctx: &mut TxContext) {
+        let burn_balance_a = balance::value(&pool.burn_balance_a);
 
-    if (burn_balance_a >= BURN_THRESHOLD) {
-        let (amount_out_b, swap_fee_amount) = calc_burn_swap_out_b(
-            burn_balance_a,
-            balance::value(&pool.balance_a),
-            balance::value(&pool.balance_b)
-        );
-
-        let mut burn_funds_a = balance::split(&mut pool.burn_balance_a, burn_balance_a);
-
-        // ✅ Fix: Explicit scope to avoid syntax issues
-        if (swap_fee_amount > 0) {
-            balance::join(
-                &mut pool.swap_balance_a, 
-                balance::split(&mut burn_funds_a, swap_fee_amount)
+        if (burn_balance_a >= BURN_THRESHOLD) {
+            let (amount_out_b, swap_fee_amount) = calc_burn_swap_out_b(
+                burn_balance_a,
+                balance::value(&pool.balance_a),
+                balance::value(&pool.balance_b)
             );
-        };
 
-        // ✅ Ensure this statement is properly scoped and terminated
-        balance::join(&mut pool.balance_a, burn_funds_a);
+            let mut burn_funds_a = balance::split(&mut pool.burn_balance_a, burn_balance_a);
 
-        let burn_funds_b = balance::split(&mut pool.balance_b, amount_out_b);
-        balance::join(&mut pool.burn_balance_b, burn_funds_b);
+            if (swap_fee_amount > 0) {
+                balance::join(
+                    &mut pool.swap_balance_a, 
+                    balance::split(&mut burn_funds_a, swap_fee_amount)
+                );
+            };
 
-        // ✅ Emit event correctly
-        event::emit(BurnFeeDistributed {
-            pool_id: object::id(pool),
-            amount_a_burnt: burn_balance_a,
-            amount_b_received: amount_out_b,
-            timestamp: get_timestamp(clock) 
-        });
+            balance::join(&mut pool.balance_a, burn_funds_a);
+
+            let burn_funds_b = balance::split(&mut pool.balance_b, amount_out_b);
+            balance::join(&mut pool.burn_balance_b, burn_funds_b);
+
+            event::emit(BurnFeeDistributed {
+                pool_id: object::id(pool),
+                amount_a_burnt: burn_balance_a,
+                amount_b_received: amount_out_b,
+                timestamp: get_timestamp(clock) 
+            });
+        }
     }
-}
 
-
-
-
-
-    /// Burns accumulated fees by sending them to the zero address.
+    /// Burns accumulated fees by locking in the pool struct
     public fun distribute_swap_fee<A, B>(pool: &mut Pool<A, B>, ctx: &mut TxContext) {
         let swap_balance = balance::value(&pool.swap_balance_a);
 
@@ -241,31 +233,31 @@ module srm_dex_v1::srmV1 {
     }
 
     /// Returns all pool data in a structured format for UI consumption.
-public fun get_pool_info<A, B>(pool: &Pool<A, B>): (
-    u64, u64, u64,    // Balances: Token A, Token B, LP supply
-    u64, u64, u64, u64, // Fees: LP builder, burn, dev royalty, rewards
-    u64, u64, u64, u64, u64, // Fee balances: Swap, burn A, burn B, dev, rewards
-    address // Developer wallet
-) {
-    (
-        balance::value(&pool.balance_a),
-        balance::value(&pool.balance_b),
-        balance::supply_value(&pool.lp_supply),
+    public fun get_pool_info<A, B>(pool: &Pool<A, B>): (
+        u64, u64, u64,    // Balances: Token A, Token B, LP supply
+        u64, u64, u64, u64, // Fees: LP builder, burn, dev royalty, rewards
+        u64, u64, u64, u64, u64, // Fee balances: Swap, burn A, burn B, dev, rewards
+        address // Developer wallet
+    ) {
+        (
+            balance::value(&pool.balance_a),
+            balance::value(&pool.balance_b),
+            balance::supply_value(&pool.lp_supply),
 
-        pool.lp_builder_fee,
-        pool.burn_fee,
-        pool.dev_royalty_fee,
-        pool.rewards_fee,
+            pool.lp_builder_fee,
+            pool.burn_fee,
+            pool.dev_royalty_fee,
+            pool.rewards_fee,
 
-        balance::value(&pool.swap_balance_a),
-        balance::value(&pool.burn_balance_a),
-        balance::value(&pool.burn_balance_b),
-        balance::value(&pool.dev_balance_a),
-        balance::value(&pool.reward_balance_a),
+            balance::value(&pool.swap_balance_a),
+            balance::value(&pool.burn_balance_a),
+            balance::value(&pool.burn_balance_b),
+            balance::value(&pool.dev_balance_a),
+            balance::value(&pool.reward_balance_a),
 
-        pool.dev_wallet
-    )
-}
+            pool.dev_wallet
+        )
+    }
 
     /* === Factory === */
 
@@ -519,254 +511,260 @@ public fun get_pool_info<A, B>(pool: &Pool<A, B>): (
     }
 
     public fun swap_a_for_b<A, B>(
-    pool: &mut Pool<A, B>, 
-    input: Balance<A>, 
-    min_out: u64,
-    clock: &Clock,
-    ctx: &mut TxContext
-): Balance<B> {
-    assert!(balance::value(&input) > 0, EZeroInput);
-    assert!(balance::value(&pool.balance_a) > 0 && balance::value(&pool.balance_b) > 0, ENoLiquidity);
+        pool: &mut Pool<A, B>, 
+        input: Balance<A>, 
+        min_out: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): Balance<B> {
+        assert!(balance::value(&input) > 0, EZeroInput);
+        assert!(balance::value(&pool.balance_a) > 0 && balance::value(&pool.balance_b) > 0, ENoLiquidity);
 
-    let input_amount = balance::value(&input);
-    let pool_a_amount = balance::value(&pool.balance_a);
-    let pool_b_amount = balance::value(&pool.balance_b);
+        let input_amount = balance::value(&input);
+        let pool_a_amount = balance::value(&pool.balance_a);
+        let pool_b_amount = balance::value(&pool.balance_b);
 
-    // Retrieve fees from pool (excluding swap_fee since it's a constant)
-    let (lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee) = get_pool_fees(pool);
+        // Retrieve fees from pool (excluding swap_fee since it's a constant)
+        let (lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee) = get_pool_fees(pool);
 
-    // Calculate swap result
-    let (
-        final_out_b, 
-        lp_in_fee, 
-        lp_out_fee, 
-        swap_fee_amount, 
-        burn_fee_amount, 
-        dev_fee_amount, 
-        reward_fee_amount
-    ) = calc_swap_out_b(
-        input_amount, pool_a_amount, pool_b_amount, 
-        lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee
-    );
+        // Calculate swap result
+        let (
+            final_out_b, 
+            lp_in_fee, 
+            lp_out_fee, 
+            swap_fee_amount, 
+            burn_fee_amount, 
+            dev_fee_amount, 
+            reward_fee_amount
+        ) = calc_swap_out_b(
+            input_amount, pool_a_amount, pool_b_amount, 
+            lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee
+        );
 
-    assert!(final_out_b >= min_out, EExcessiveSlippage);
+        assert!(final_out_b >= min_out, EExcessiveSlippage);
 
-    // Deposit input into pool
-    balance::join(&mut pool.balance_a, input);
+        // Deposit input into pool
+        balance::join(&mut pool.balance_a, input);
 
-    // Distribute fees into respective balances
-    if (swap_fee_amount != 0) {
-    balance::join(&mut pool.swap_balance_a, balance::split(&mut pool.balance_a, swap_fee_amount));
-    };
-    if (burn_fee_amount != 0) {
-    balance::join(&mut pool.burn_balance_a, balance::split(&mut pool.balance_a, burn_fee_amount));
-    };
-    if (dev_fee_amount != 0) {
-    balance::join(&mut pool.dev_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
-    };
-    if (reward_fee_amount != 0) {
-    balance::join(&mut pool.reward_balance_a, balance::split(&mut pool.balance_a, reward_fee_amount));
-    };
+        // Distribute fees into respective balances
+        if (swap_fee_amount != 0) {
+            balance::join(&mut pool.swap_balance_a, balance::split(&mut pool.balance_a, swap_fee_amount));
+        };
 
-    // **Distribute accumulated fees after processing the swap**
-    distribute_dev_royalty_fee(pool, clock, ctx);
-    distribute_burn_fee(pool, clock, ctx);
-    distribute_swap_fee(pool, ctx);
+        if (burn_fee_amount != 0) {
+            balance::join(&mut pool.burn_balance_a, balance::split(&mut pool.balance_a, burn_fee_amount));
+        };
 
-    let user_wallet = sender(ctx);
-    let timestamp = get_timestamp(clock);
+        if (dev_fee_amount != 0) {
+            balance::join(&mut pool.dev_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
+        };
+    
+        if (reward_fee_amount != 0) {
+            balance::join(&mut pool.reward_balance_a, balance::split(&mut pool.balance_a, reward_fee_amount));
+        };
 
-    event::emit(Swapped {
-        pool_id: object::id(pool),
-        wallet: user_wallet, 
-        tokenin: type_name::get<A>(),
-        amountin: input_amount,
-        tokenout: type_name::get<B>(),
-        amountout: final_out_b,
-        timestamp: timestamp
-    });
+        // **Distribute accumulated fees after processing the swap**
+        distribute_dev_royalty_fee(pool, clock, ctx);
+        distribute_burn_fee(pool, clock, ctx);
+        distribute_swap_fee(pool, ctx);
 
-    // Return the final output balance
-    balance::split(&mut pool.balance_b, final_out_b)
-}
+        let user_wallet = sender(ctx);
+        let timestamp = get_timestamp(clock);
+
+        event::emit(Swapped {
+            pool_id: object::id(pool),
+            wallet: user_wallet, 
+            tokenin: type_name::get<A>(),
+            amountin: input_amount,
+            tokenout: type_name::get<B>(),
+            amountout: final_out_b,
+            timestamp: timestamp
+        });
+
+        // Return the final output balance
+        balance::split(&mut pool.balance_b, final_out_b)
+    }
 
     public fun swap_b_for_a<A, B>(
-    pool: &mut Pool<A, B>, 
-    input: Balance<B>, 
-    min_out: u64,
-    clock: &Clock,
-    ctx: &mut TxContext
-): Balance<A> {
-    assert!(balance::value(&input) > 0, EZeroInput);
-    assert!(balance::value(&pool.balance_a) > 0 && balance::value(&pool.balance_b) > 0, ENoLiquidity);
+        pool: &mut Pool<A, B>, 
+        input: Balance<B>, 
+        min_out: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): Balance<A> {
+        assert!(balance::value(&input) > 0, EZeroInput);
+        assert!(balance::value(&pool.balance_a) > 0 && balance::value(&pool.balance_b) > 0, ENoLiquidity);
 
-    let input_amount = balance::value(&input);
-    let pool_b_amount = balance::value(&pool.balance_b);
-    let pool_a_amount = balance::value(&pool.balance_a);
+        let input_amount = balance::value(&input);
+        let pool_b_amount = balance::value(&pool.balance_b);
+        let pool_a_amount = balance::value(&pool.balance_a);
 
-    // Retrieve fees from pool
-    let (lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee) = get_pool_fees(pool);
+        // Retrieve fees from pool
+        let (lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee) = get_pool_fees(pool);
 
-    // Calculate swap result
-    let (
-        final_out_a, 
-        lp_in_fee, 
-        lp_out_fee, 
-        swap_fee_amount, 
-        burn_fee_amount, 
-        dev_fee_amount, 
-        reward_fee_amount
-    ) = calc_swap_out_a(
-        input_amount, pool_b_amount, pool_a_amount, 
-        lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee
-    );
+        // Calculate swap result
+        let (
+            final_out_a, 
+            lp_in_fee, 
+            lp_out_fee, 
+            swap_fee_amount, 
+            burn_fee_amount, 
+            dev_fee_amount, 
+            reward_fee_amount
+        ) = calc_swap_out_a(
+            input_amount, pool_b_amount, pool_a_amount, 
+            lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee
+        );
 
-    assert!(final_out_a >= min_out, EExcessiveSlippage);
+        assert!(final_out_a >= min_out, EExcessiveSlippage);
 
-    balance::join(&mut pool.balance_b, input);
+        balance::join(&mut pool.balance_b, input);
 
-    // **Now correctly distributing swap fees**
-    if (swap_fee_amount != 0) {
-    balance::join(&mut pool.swap_balance_a, balance::split(&mut pool.balance_a, swap_fee_amount));
-    };
-    if (burn_fee_amount != 0) {
-    balance::join(&mut pool.burn_balance_a, balance::split(&mut pool.balance_a, burn_fee_amount));
-    };
-    if (dev_fee_amount != 0) {
-    balance::join(&mut pool.dev_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
-    };
-    if (reward_fee_amount != 0) {
-    balance::join(&mut pool.reward_balance_a, balance::split(&mut pool.balance_a, reward_fee_amount));
-    };
+        // **Now correctly distributing swap fees**
+        if (swap_fee_amount != 0) {
+            balance::join(&mut pool.swap_balance_a, balance::split(&mut pool.balance_a, swap_fee_amount));
+        };
 
-    // **Distribute accumulated fees after processing the swap**
-    distribute_dev_royalty_fee(pool, clock, ctx);
-    distribute_burn_fee(pool, clock, ctx);
-    distribute_swap_fee(pool, ctx);
+        if (burn_fee_amount != 0) {
+            balance::join(&mut pool.burn_balance_a, balance::split(&mut pool.balance_a, burn_fee_amount));
+        };
+    
+        if (dev_fee_amount != 0) {
+            balance::join(&mut pool.dev_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
+        };
+    
+        if (reward_fee_amount != 0) {
+            balance::join(&mut pool.reward_balance_a, balance::split(&mut pool.balance_a, reward_fee_amount));
+        };
 
-    let user_wallet = sender(ctx);        
-    let timestamp = get_timestamp(clock); 
+        // **Distribute accumulated fees after processing the swap**
+        distribute_dev_royalty_fee(pool, clock, ctx);
+        distribute_burn_fee(pool, clock, ctx);
+        distribute_swap_fee(pool, ctx);
 
-    event::emit(Swapped {
-        pool_id: object::id(pool),
-        wallet: user_wallet,
-        tokenin: type_name::get<B>(),
-        amountin: input_amount,
-        tokenout: type_name::get<A>(),
-        amountout: final_out_a,
-        timestamp: timestamp
-    });
+        let user_wallet = sender(ctx);        
+        let timestamp = get_timestamp(clock); 
 
-    balance::split(&mut pool.balance_a, final_out_a)
-}
+        event::emit(Swapped {
+            pool_id: object::id(pool),
+            wallet: user_wallet,
+            tokenin: type_name::get<B>(),
+            amountin: input_amount,
+            tokenout: type_name::get<A>(),
+            amountout: final_out_a,
+            timestamp: timestamp
+        });
+
+        balance::split(&mut pool.balance_a, final_out_a)
+    }
 
     fun calc_swap_out_a(
-    input_amount_b: u64, 
-    pool_balance_b: u64, 
-    pool_balance_a: u64, 
-    lp_builder_fee: u64,
-    burn_fee: u64,
-    dev_royalty_fee: u64,
-    rewards_fee: u64
-): (u64, u64, u64, u64, u64, u64, u64) { // Now returns 7 values instead of 8
-    // Step 1: Apply 50% of LP builder fee on `input_amount_b`
-    let lp_builder_fee_amount_in = ceil_muldiv(input_amount_b, lp_builder_fee, 2 * BASIS_POINTS);
-    let adjusted_amount_in_b = input_amount_b - lp_builder_fee_amount_in;
+        input_amount_b: u64, 
+        pool_balance_b: u64, 
+        pool_balance_a: u64, 
+        lp_builder_fee: u64,
+        burn_fee: u64,
+        dev_royalty_fee: u64,
+        rewards_fee: u64
+    ): (u64, u64, u64, u64, u64, u64, u64) { // Now returns 7 values instead of 8
+        // Step 1: Apply 50% of LP builder fee on `input_amount_b`
+        let lp_builder_fee_amount_in = ceil_muldiv(input_amount_b, lp_builder_fee, 2 * BASIS_POINTS);
+        let adjusted_amount_in_b = input_amount_b - lp_builder_fee_amount_in;
 
-    // Step 2: Calculate `amount_out_a` based on adjusted input
-    let amount_out_a = muldiv(adjusted_amount_in_b, pool_balance_a, pool_balance_b + adjusted_amount_in_b);
+        // Step 2: Calculate `amount_out_a` based on adjusted input
+        let amount_out_a = muldiv(adjusted_amount_in_b, pool_balance_a, pool_balance_b + adjusted_amount_in_b);
 
-    // Step 3: Calculate swap fee based on SWAP_FEE constant
-    let swap_fee_amount = ceil_muldiv(amount_out_a, SWAP_FEE, BASIS_POINTS);
+        // Step 3: Calculate swap fee based on SWAP_FEE constant
+        let swap_fee_amount = ceil_muldiv(amount_out_a, SWAP_FEE, BASIS_POINTS);
 
-    // Step 4: Apply burn fee, dev royalty fee, and rewards fee to `amount_out_a`
-    let burn_fee_amount = ceil_muldiv(amount_out_a, burn_fee, BASIS_POINTS);
-    let dev_fee_amount = ceil_muldiv(amount_out_a, dev_royalty_fee, BASIS_POINTS);
-    let reward_fee_amount = ceil_muldiv(amount_out_a, rewards_fee, BASIS_POINTS);
+        // Step 4: Apply burn fee, dev royalty fee, and rewards fee to `amount_out_a`
+        let burn_fee_amount = ceil_muldiv(amount_out_a, burn_fee, BASIS_POINTS);
+        let dev_fee_amount = ceil_muldiv(amount_out_a, dev_royalty_fee, BASIS_POINTS);
+        let reward_fee_amount = ceil_muldiv(amount_out_a, rewards_fee, BASIS_POINTS);
 
-    // Step 5: Apply 50% of LP builder fee on `amount_out_a`
-    let lp_builder_fee_amount_out = ceil_muldiv(amount_out_a, lp_builder_fee, 2 * BASIS_POINTS);
+        // Step 5: Apply 50% of LP builder fee on `amount_out_a`
+        let lp_builder_fee_amount_out = ceil_muldiv(amount_out_a, lp_builder_fee, 2 * BASIS_POINTS);
     
-    // Step 6: Calculate final amount out after deducting fees
-    let final_amount_out_a = amount_out_a 
-        - swap_fee_amount
-        - burn_fee_amount 
-        - dev_fee_amount 
-        - reward_fee_amount 
-        - lp_builder_fee_amount_out;
+        // Step 6: Calculate final amount out after deducting fees
+        let final_amount_out_a = amount_out_a 
+            - swap_fee_amount
+            - burn_fee_amount 
+            - dev_fee_amount 
+            - reward_fee_amount 
+            - lp_builder_fee_amount_out;
 
-    // Returns:
-    // 1. Final amount of token A received by user
-    // 2. LP builder fee taken from token B
-    // 3. LP builder fee taken from token A
-    // 4. Swap fee taken from token A
-    // 5. Burn fee taken from token A
-    // 6. Developer fee taken from token A
-    // 7. Rewards fee taken from token A
-    (final_amount_out_a, lp_builder_fee_amount_in, lp_builder_fee_amount_out, swap_fee_amount, burn_fee_amount, dev_fee_amount, reward_fee_amount)
-}
+        // Returns:
+        // 1. Final amount of token A received by user
+        // 2. LP builder fee taken from token B
+        // 3. LP builder fee taken from token A
+        // 4. Swap fee taken from token A
+        // 5. Burn fee taken from token A
+        // 6. Developer fee taken from token A
+        // 7. Rewards fee taken from token A
+        (final_amount_out_a, lp_builder_fee_amount_in, lp_builder_fee_amount_out, swap_fee_amount, burn_fee_amount, dev_fee_amount, reward_fee_amount)
+    }
 
     fun calc_swap_out_b(
-    input_amount_a: u64, 
-    pool_balance_a: u64, 
-    pool_balance_b: u64, 
-    lp_builder_fee: u64,
-    burn_fee: u64,
-    dev_royalty_fee: u64,
-    rewards_fee: u64
-): (u64, u64, u64, u64, u64, u64, u64) { // Now returns 7 values instead of 8
-    // Step 1: Calculate all fees on `input_amount_a`
-    let swap_fee_amount = ceil_muldiv(input_amount_a, SWAP_FEE, BASIS_POINTS);
-    let burn_fee_amount = ceil_muldiv(input_amount_a, burn_fee, BASIS_POINTS);
-    let dev_fee_amount = ceil_muldiv(input_amount_a, dev_royalty_fee, BASIS_POINTS);
-    let reward_fee_amount = ceil_muldiv(input_amount_a, rewards_fee, BASIS_POINTS);
-    let lp_builder_fee_amount_in = ceil_muldiv(input_amount_a, lp_builder_fee, 2 * BASIS_POINTS);
+        input_amount_a: u64, 
+        pool_balance_a: u64, 
+        pool_balance_b: u64, 
+        lp_builder_fee: u64,
+        burn_fee: u64,
+        dev_royalty_fee: u64,
+        rewards_fee: u64
+    ): (u64, u64, u64, u64, u64, u64, u64) { // Now returns 7 values instead of 8
+        // Step 1: Calculate all fees on `input_amount_a`
+        let swap_fee_amount = ceil_muldiv(input_amount_a, SWAP_FEE, BASIS_POINTS);
+        let burn_fee_amount = ceil_muldiv(input_amount_a, burn_fee, BASIS_POINTS);
+        let dev_fee_amount = ceil_muldiv(input_amount_a, dev_royalty_fee, BASIS_POINTS);
+        let reward_fee_amount = ceil_muldiv(input_amount_a, rewards_fee, BASIS_POINTS);
+        let lp_builder_fee_amount_in = ceil_muldiv(input_amount_a, lp_builder_fee, 2 * BASIS_POINTS);
 
-    // Step 2: Adjust `input_amount_a` after deducting fees
-    let adjusted_amount_in_a = input_amount_a 
+        // Step 2: Adjust `input_amount_a` after deducting fees
+        let adjusted_amount_in_a = input_amount_a 
         - swap_fee_amount 
         - burn_fee_amount 
         - dev_fee_amount 
         - reward_fee_amount 
         - lp_builder_fee_amount_in;
 
-    // Step 3: Calculate `amount_out_b` from adjusted input
-    let amount_out_b = muldiv(adjusted_amount_in_a, pool_balance_b, pool_balance_a + adjusted_amount_in_a);
+        // Step 3: Calculate `amount_out_b` from adjusted input
+        let amount_out_b = muldiv(adjusted_amount_in_a, pool_balance_b, pool_balance_a + adjusted_amount_in_a);
 
-    // Step 4: Apply 50% of LP Builder Fee on output
-    let lp_builder_fee_amount_out = ceil_muldiv(amount_out_b, lp_builder_fee, 2 * BASIS_POINTS);
-    let final_amount_out_b = amount_out_b - lp_builder_fee_amount_out;
+        // Step 4: Apply 50% of LP Builder Fee on output
+        let lp_builder_fee_amount_out = ceil_muldiv(amount_out_b, lp_builder_fee, 2 * BASIS_POINTS);
+        let final_amount_out_b = amount_out_b - lp_builder_fee_amount_out;
 
-    // Returns:
-    // 1. Final amount of token B received by user
-    // 2. LP builder fee taken from token A
-    // 3. LP builder fee taken from token B
-    // 4. Swap fee taken from token A
-    // 5. Burn fee taken from token A
-    // 6. Developer fee taken from token A
-    // 7. Rewards fee taken from token A
-    (final_amount_out_b, lp_builder_fee_amount_in, lp_builder_fee_amount_out, swap_fee_amount, burn_fee_amount, dev_fee_amount, reward_fee_amount)
-}
+        // Returns:
+        // 1. Final amount of token B received by user
+        // 2. LP builder fee taken from token A
+        // 3. LP builder fee taken from token B
+        // 4. Swap fee taken from token A
+        // 5. Burn fee taken from token A
+        // 6. Developer fee taken from token A
+        // 7. Rewards fee taken from token A
+        (final_amount_out_b, lp_builder_fee_amount_in, lp_builder_fee_amount_out, swap_fee_amount, burn_fee_amount, dev_fee_amount, reward_fee_amount)
+    }
 
-fun calc_burn_swap_out_b(
-    input_amount_a: u64, 
-    pool_balance_a: u64, 
-    pool_balance_b: u64, 
-): (u64, u64) {
-    // Step 1: Calculate all fees on `input_amount_a`
-    let swap_fee_amount = ceil_muldiv(input_amount_a, SWAP_FEE, BASIS_POINTS);
+    fun calc_burn_swap_out_b(
+        input_amount_a: u64, 
+        pool_balance_a: u64, 
+        pool_balance_b: u64, 
+    ): (u64, u64) {
+        // Step 1: Calculate all fees on `input_amount_a`
+        let swap_fee_amount = ceil_muldiv(input_amount_a, SWAP_FEE, BASIS_POINTS);
     
-    // Step 2: Adjust `input_amount_a` after deducting fees
-    let adjusted_amount_in_a = input_amount_a - swap_fee_amount;
+        // Step 2: Adjust `input_amount_a` after deducting fees
+        let adjusted_amount_in_a = input_amount_a - swap_fee_amount;
 
-    // Step 3: Calculate `amount_out_b` from adjusted input
-    let amount_out_b = muldiv(adjusted_amount_in_a, pool_balance_b, pool_balance_a + adjusted_amount_in_a);
+        // Step 3: Calculate `amount_out_b` from adjusted input
+        let amount_out_b = muldiv(adjusted_amount_in_a, pool_balance_b, pool_balance_a + adjusted_amount_in_a);
 
-    // Returns:
-    // 1. Final amount of token B
-    // 2. Swap fee taken from token A
-    (amount_out_b, swap_fee_amount)
-}
+        // Returns:
+        // 1. Final amount of token B
+        // 2. Swap fee taken from token A
+        (amount_out_b, swap_fee_amount)
+    }
 
     /* === with coin === */
 
@@ -846,15 +844,14 @@ fun calc_burn_swap_out_b(
         let sender_addr = sender(ctx);
 
 
-    // Return remaining balances to sender
-    let remaining_a = coin::into_balance(init_a);
-let remaining_b = coin::into_balance(init_b);
-destroy_zero_or_transfer_balance(remaining_a, sender_addr, ctx);
-destroy_zero_or_transfer_balance(remaining_b, sender_addr, ctx);
+        // Return remaining balances to sender
+        let remaining_a = coin::into_balance(init_a);
+        let remaining_b = coin::into_balance(init_b);
+        destroy_zero_or_transfer_balance(remaining_a, sender_addr, ctx);
+        destroy_zero_or_transfer_balance(remaining_b, sender_addr, ctx);
 
-
-    // Transfer LP tokens to sender
-    transfer::public_transfer(coin::from_balance(lp_balance, ctx), sender_addr);
+        // Transfer LP tokens to sender
+        transfer::public_transfer(coin::from_balance(lp_balance, ctx), sender_addr);
     }
 
     public fun add_liquidity_with_coins<A, B>(pool: &mut Pool<A, B>, input_a: Coin<A>, input_b: Coin<B>, min_lp_out: u64, ctx: &mut TxContext): (Coin<A>, Coin<B>, Coin<LP<A, B>>) {
@@ -892,51 +889,49 @@ destroy_zero_or_transfer_balance(remaining_b, sender_addr, ctx);
     }
 
     public fun swap_a_for_b_with_coin<A, B>(
-    pool: &mut Pool<A, B>, 
-    input: Coin<A>, 
-    min_out: u64, 
-    clock: &Clock,
-    ctx: &mut TxContext
-): Coin<B> {
-    let b_out = swap_a_for_b(pool, coin::into_balance(input), min_out, clock, ctx);
+        pool: &mut Pool<A, B>, 
+        input: Coin<A>, 
+        min_out: u64, 
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): Coin<B> {
+        let b_out = swap_a_for_b(pool, coin::into_balance(input), min_out, clock, ctx);
 
-    coin::from_balance(b_out, ctx)
-}
+        coin::from_balance(b_out, ctx)
+    }
 
     public entry fun swap_a_for_b_with_coin_and_transfer_to_sender<A, B>(
-    pool: &mut Pool<A, B>, 
-    input: Coin<A>, 
-    min_out: u64, 
-    clock: &Clock,
-    ctx: &mut TxContext
-) {
-    let b_out = swap_a_for_b(pool, coin::into_balance(input), min_out, clock, ctx);
-    transfer::public_transfer(coin::from_balance(b_out, ctx), sender(ctx));
-}
+        pool: &mut Pool<A, B>, 
+        input: Coin<A>, 
+        min_out: u64, 
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let b_out = swap_a_for_b(pool, coin::into_balance(input), min_out, clock, ctx);
+        transfer::public_transfer(coin::from_balance(b_out, ctx), sender(ctx));
+    }
 
     public fun swap_b_for_a_with_coin<A, B>(
-    pool: &mut Pool<A, B>, 
-    input: Coin<B>, 
-    min_out: u64, 
-    clock: &Clock,
-    ctx: &mut TxContext
-): Coin<A> {
-    let a_out = swap_b_for_a(pool, coin::into_balance(input), min_out, clock, ctx);
+        pool: &mut Pool<A, B>, 
+        input: Coin<B>, 
+        min_out: u64, 
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): Coin<A> {
+        let a_out = swap_b_for_a(pool, coin::into_balance(input), min_out, clock, ctx);
 
-    coin::from_balance(a_out, ctx)
-}
-
+        coin::from_balance(a_out, ctx)
+    }
 
     public entry fun swap_b_for_a_with_coin_and_transfer_to_sender<A, B>(
-    pool: &mut Pool<A, B>, 
-    input: Coin<B>, 
-    min_out: u64, 
-    clock: &Clock,
-    ctx: &mut TxContext
-) {
-    let a_out = swap_b_for_a(pool, coin::into_balance(input), min_out, clock, ctx);
-    transfer::public_transfer(coin::from_balance(a_out, ctx), sender(ctx));
-}
-
+        pool: &mut Pool<A, B>, 
+        input: Coin<B>, 
+        min_out: u64, 
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let a_out = swap_b_for_a(pool, coin::into_balance(input), min_out, clock, ctx);
+        transfer::public_transfer(coin::from_balance(a_out, ctx), sender(ctx));
+    }
 
 }
