@@ -40,6 +40,7 @@ module srm_dex_v1::srmV1 {
 
     const DEV_ROYALTY_FEE_THRESHOLD: u64 = 10_000_000_000; // 10 SUI in MIST
     const BURN_THRESHOLD: u64 = 10_000_000_000; // 10 SUI in MIST
+    const SWAP_THRESHOLD: u64 = 1_000_000_000; // 1 SUI in MIST
 
     /* === math === */
 
@@ -129,15 +130,46 @@ module srm_dex_v1::srmV1 {
         }
     }
 
-    /// Burns accumulated fees by sending them to the zero address.
-    public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, ctx: &mut TxContext) {
-        let burn_balance = balance::value(&pool.burn_balance_a);
+    /// Burns accumulated fees by swapping `burn_balance_a` for `balance_b` and burning `balance_b`.
+public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, ctx: &mut TxContext) {
+    let burn_balance_a = balance::value(&pool.burn_balance_a);
 
-        if (burn_balance >= BURN_THRESHOLD) {
-            let burn_funds: Balance<A> = balance::split(&mut pool.burn_balance_a, burn_balance);
-            let zero_address: address = @0x0000000000000000000000000000000000000000;
+    if (burn_balance_a >= BURN_THRESHOLD) {
+        // Step 1: Calculate swap result using `calc_burn_swap_out_b`
+        let (amount_out_b, swap_fee_amount) = calc_burn_swap_out_b(
+            burn_balance_a,
+            balance::value(&pool.balance_a),
+            balance::value(&pool.balance_b)
+        );
+
+        // Step 2: Perform swap
+        // Move CoinA from `burn_balance_a`
+        let mut burn_funds_a = balance::split(&mut pool.burn_balance_a, burn_balance_a);
         
-        transfer::public_transfer(coin::from_balance<A>(burn_funds, ctx), zero_address);
+        // Store swap fee in `swap_balance_a`
+        balance::join(&mut pool.swap_balance_a, balance::split(&mut burn_funds_a, swap_fee_amount));
+        
+        // Deposit remaining CoinA into `balance_a`
+        balance::join(&mut pool.balance_a, burn_funds_a);
+
+        // Step 3: Withdraw CoinB and store it in `burn_balance_b`
+        let burn_funds_b = balance::split(&mut pool.balance_b, amount_out_b);
+        balance::join(&mut pool.burn_balance_b, burn_funds_b);
+
+        // 🔥 CoinB is now permanently locked in `burn_balance_b`
+    }
+}
+
+
+    /// Burns accumulated fees by sending them to the zero address.
+    public fun distribute_swap_fee<A, B>(pool: &mut Pool<A, B>, ctx: &mut TxContext) {
+        let swap_balance = balance::value(&pool.swap_balance_a);
+
+        if (swap_balance >= SWAP_THRESHOLD) {
+            let swap_funds: Balance<A> = balance::split(&mut pool.swap_balance_a, swap_balance);
+            let admin_address: address = @0xa4704c71a56fbdfb854ef938b87cd7d38c075f51dd3221d4c228a4ede9c6c0c2; // add admin address
+        
+        transfer::public_transfer(coin::from_balance<A>(swap_funds, ctx), admin_address);
         }
     }
 
@@ -158,6 +190,7 @@ module srm_dex_v1::srmV1 {
         rewards_fee: u64,
         swap_balance_a: Balance<A>,
         burn_balance_a: Balance<A>,
+        burn_balance_b: Balance<B>,
         dev_balance_a: Balance<A>,
         reward_balance_a: Balance<A>,
         dev_wallet: address
@@ -277,6 +310,7 @@ module srm_dex_v1::srmV1 {
         // Initialize fee balances
         swap_balance_a: balance::zero(),
         burn_balance_a: balance::zero(),
+        burn_balance_b: balance::zero(),
         dev_balance_a: balance::zero(),
         reward_balance_a: balance::zero(),
 
@@ -470,6 +504,7 @@ module srm_dex_v1::srmV1 {
     // **Distribute accumulated fees after processing the swap**
     distribute_dev_royalty_fee(pool, ctx);
     distribute_burn_fee(pool, ctx);
+    distribute_swap_fee(pool, ctx);
 
     let user_wallet = sender(ctx);
     let timestamp = get_timestamp(clock);
@@ -532,6 +567,7 @@ module srm_dex_v1::srmV1 {
     // **Distribute accumulated fees after processing the swap**
     distribute_dev_royalty_fee(pool, ctx);
     distribute_burn_fee(pool, ctx);
+    distribute_swap_fee(pool, ctx);
 
     let user_wallet = sender(ctx);        
     let timestamp = get_timestamp(clock); 
@@ -635,6 +671,26 @@ module srm_dex_v1::srmV1 {
     // 6. Developer fee taken from token A
     // 7. Rewards fee taken from token A
     (final_amount_out_b, lp_builder_fee_amount_in, lp_builder_fee_amount_out, swap_fee_amount, burn_fee_amount, dev_fee_amount, reward_fee_amount)
+}
+
+fun calc_burn_swap_out_b(
+    input_amount_a: u64, 
+    pool_balance_a: u64, 
+    pool_balance_b: u64, 
+): (u64, u64) {
+    // Step 1: Calculate all fees on `input_amount_a`
+    let swap_fee_amount = ceil_muldiv(input_amount_a, SWAP_FEE, BASIS_POINTS);
+    
+    // Step 2: Adjust `input_amount_a` after deducting fees
+    let adjusted_amount_in_a = input_amount_a - swap_fee_amount;
+
+    // Step 3: Calculate `amount_out_b` from adjusted input
+    let amount_out_b = muldiv(adjusted_amount_in_a, pool_balance_b, pool_balance_a + adjusted_amount_in_a);
+
+    // Returns:
+    // 1. Final amount of token B
+    // 2. Swap fee taken from token A
+    (amount_out_b, swap_fee_amount)
 }
 
     /* === with coin === */
