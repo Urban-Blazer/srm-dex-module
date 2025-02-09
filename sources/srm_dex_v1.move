@@ -208,6 +208,33 @@ public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, ctx: &mut TxContext)
         (pool.lp_builder_fee, pool.burn_fee, pool.dev_royalty_fee, pool.rewards_fee)
     }
 
+    /// Returns all pool data in a structured format for UI consumption.
+public fun get_pool_info<A, B>(pool: &Pool<A, B>): (
+    u64, u64, u64,    // Balances: Token A, Token B, LP supply
+    u64, u64, u64, u64, // Fees: LP builder, burn, dev royalty, rewards
+    u64, u64, u64, u64, u64, // Fee balances: Swap, burn A, burn B, dev, rewards
+    address // Developer wallet
+) {
+    (
+        balance::value(&pool.balance_a),
+        balance::value(&pool.balance_b),
+        balance::supply_value(&pool.lp_supply),
+
+        pool.lp_builder_fee,
+        pool.burn_fee,
+        pool.dev_royalty_fee,
+        pool.rewards_fee,
+
+        balance::value(&pool.swap_balance_a),
+        balance::value(&pool.burn_balance_a),
+        balance::value(&pool.burn_balance_b),
+        balance::value(&pool.dev_balance_a),
+        balance::value(&pool.reward_balance_a),
+
+        pool.dev_wallet // ✅ Added dev wallet address
+    )
+}
+
     /* === Factory === */
 
     public struct Factory has key {
