@@ -107,58 +107,90 @@ module srm_dex_v1::srmV1 {
     }
 
     public struct Swapped has copy, drop {
-    pool_id: ID,
-    wallet: address,
-    tokenin: TypeName,
-    amountin: u64,
-    tokenout: TypeName,
-    amountout: u64,
-    timestamp: u64
-}
+        pool_id: ID,
+        wallet: address,
+        tokenin: TypeName,
+        amountin: u64,
+        tokenout: TypeName,
+        amountout: u64,
+        timestamp: u64
+    }
+
+    public struct DevRoyaltyFeeDistributed has copy, drop {
+        pool_id: ID,
+        dev_wallet: address,
+        amount: u64,
+        timestamp: u64
+    }
+
+    public struct BurnFeeDistributed has copy, drop {
+        pool_id: ID,
+        amount_a_burnt: u64,
+        amount_b_received: u64,
+        timestamp: u64
+    }
 
     /* === Rewards Distribution === */
 
     /// Distributes accumulated dev royalty fees to the developer wallet.
-    public fun distribute_dev_royalty_fee<A, B>(pool: &mut Pool<A, B>, ctx: &mut TxContext) {
-        let dev_balance = balance::value(&pool.dev_balance_a);
+    public fun distribute_dev_royalty_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, ctx: &mut TxContext) {
+    let dev_balance = balance::value(&pool.dev_balance_a);
 
-        if (dev_balance >= DEV_ROYALTY_FEE_THRESHOLD) {
-            let dev_wallet = pool.dev_wallet;
-            let dev_funds = balance::split(&mut pool.dev_balance_a, dev_balance);
+    if (dev_balance >= DEV_ROYALTY_FEE_THRESHOLD) {
+        let dev_wallet = pool.dev_wallet;
+        let dev_funds = balance::split(&mut pool.dev_balance_a, dev_balance);
 
         transfer::public_transfer(coin::from_balance(dev_funds, ctx), dev_wallet);
-        }
+
+        // ✅ Ensure correct syntax for event emission
+        event::emit(DevRoyaltyFeeDistributed {
+            pool_id: object::id(pool),
+            dev_wallet: dev_wallet,  // Use `dev_wallet` from pool
+            amount: dev_balance,
+            timestamp: get_timestamp(clock) // ✅ Ensure `clock` is passed correctly
+        });
     }
+}
 
     /// Burns accumulated fees by swapping `burn_balance_a` for `balance_b` and burning `balance_b`.
-public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, ctx: &mut TxContext) {
+   public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, ctx: &mut TxContext) {
     let burn_balance_a = balance::value(&pool.burn_balance_a);
 
     if (burn_balance_a >= BURN_THRESHOLD) {
-        // Step 1: Calculate swap result using `calc_burn_swap_out_b`
         let (amount_out_b, swap_fee_amount) = calc_burn_swap_out_b(
             burn_balance_a,
             balance::value(&pool.balance_a),
             balance::value(&pool.balance_b)
         );
 
-        // Step 2: Perform swap
-        // Move CoinA from `burn_balance_a`
         let mut burn_funds_a = balance::split(&mut pool.burn_balance_a, burn_balance_a);
-        
-        // Store swap fee in `swap_balance_a`
-        balance::join(&mut pool.swap_balance_a, balance::split(&mut burn_funds_a, swap_fee_amount));
-        
-        // Deposit remaining CoinA into `balance_a`
+
+        // ✅ Fix: Explicit scope to avoid syntax issues
+        if (swap_fee_amount > 0) {
+            balance::join(
+                &mut pool.swap_balance_a, 
+                balance::split(&mut burn_funds_a, swap_fee_amount)
+            );
+        };
+
+        // ✅ Ensure this statement is properly scoped and terminated
         balance::join(&mut pool.balance_a, burn_funds_a);
 
-        // Step 3: Withdraw CoinB and store it in `burn_balance_b`
         let burn_funds_b = balance::split(&mut pool.balance_b, amount_out_b);
         balance::join(&mut pool.burn_balance_b, burn_funds_b);
 
-        // 🔥 CoinB is now permanently locked in `burn_balance_b`
+        // ✅ Emit event correctly
+        event::emit(BurnFeeDistributed {
+            pool_id: object::id(pool),
+            amount_a_burnt: burn_balance_a,
+            amount_b_received: amount_out_b,
+            timestamp: get_timestamp(clock) 
+        });
     }
 }
+
+
+
 
 
     /// Burns accumulated fees by sending them to the zero address.
@@ -537,8 +569,8 @@ public fun get_pool_info<A, B>(pool: &Pool<A, B>): (
     };
 
     // **Distribute accumulated fees after processing the swap**
-    distribute_dev_royalty_fee(pool, ctx);
-    distribute_burn_fee(pool, ctx);
+    distribute_dev_royalty_fee(pool, clock, ctx);
+    distribute_burn_fee(pool, clock, ctx);
     distribute_swap_fee(pool, ctx);
 
     let user_wallet = sender(ctx);
@@ -608,8 +640,8 @@ public fun get_pool_info<A, B>(pool: &Pool<A, B>): (
     };
 
     // **Distribute accumulated fees after processing the swap**
-    distribute_dev_royalty_fee(pool, ctx);
-    distribute_burn_fee(pool, ctx);
+    distribute_dev_royalty_fee(pool, clock, ctx);
+    distribute_burn_fee(pool, clock, ctx);
     distribute_swap_fee(pool, ctx);
 
     let user_wallet = sender(ctx);        
