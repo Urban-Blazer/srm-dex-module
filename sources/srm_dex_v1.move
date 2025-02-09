@@ -523,10 +523,18 @@ public fun get_pool_info<A, B>(pool: &Pool<A, B>): (
     balance::join(&mut pool.balance_a, input);
 
     // Distribute fees into respective balances
+    if (swap_fee_amount != 0) {
     balance::join(&mut pool.swap_balance_a, balance::split(&mut pool.balance_a, swap_fee_amount));
+    };
+    if (burn_fee_amount != 0) {
     balance::join(&mut pool.burn_balance_a, balance::split(&mut pool.balance_a, burn_fee_amount));
+    };
+    if (dev_fee_amount != 0) {
     balance::join(&mut pool.dev_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
+    };
+    if (reward_fee_amount != 0) {
     balance::join(&mut pool.reward_balance_a, balance::split(&mut pool.balance_a, reward_fee_amount));
+    };
 
     // **Distribute accumulated fees after processing the swap**
     distribute_dev_royalty_fee(pool, ctx);
@@ -586,10 +594,18 @@ public fun get_pool_info<A, B>(pool: &Pool<A, B>): (
     balance::join(&mut pool.balance_b, input);
 
     // **Now correctly distributing swap fees**
+    if (swap_fee_amount != 0) {
     balance::join(&mut pool.swap_balance_a, balance::split(&mut pool.balance_a, swap_fee_amount));
+    };
+    if (burn_fee_amount != 0) {
     balance::join(&mut pool.burn_balance_a, balance::split(&mut pool.balance_a, burn_fee_amount));
+    };
+    if (dev_fee_amount != 0) {
     balance::join(&mut pool.dev_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
+    };
+    if (reward_fee_amount != 0) {
     balance::join(&mut pool.reward_balance_a, balance::split(&mut pool.balance_a, reward_fee_amount));
+    };
 
     // **Distribute accumulated fees after processing the swap**
     distribute_dev_royalty_fee(pool, ctx);
