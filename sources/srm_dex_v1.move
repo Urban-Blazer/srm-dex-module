@@ -36,6 +36,11 @@ module srm_dex_v1::srmV1 {
     const MAX_DEV_ROYALTY_FEE: u64 = 100; // 1%
     const MAX_REWARDS_FEE: u64 = 500; // 5%
 
+    /* === Distribution Thresholds === */
+
+    const DEV_ROYALTY_FEE_THRESHOLD: u64 = 10_000_000_000; // 10 SUI in MIST
+    const BURN_THRESHOLD: u64 = 10_000_000_000; // 10 SUI in MIST
+
     /* === math === */
 
     /// Calculates (a * b) / c. Errors if result doesn't fit into u64.
@@ -109,6 +114,32 @@ module srm_dex_v1::srmV1 {
     amountout: u64,
     timestamp: u64
 }
+
+    /* === Rewards Distribution === */
+
+    /// Distributes accumulated dev royalty fees to the developer wallet.
+    public fun distribute_dev_royalty_fee<A, B>(pool: &mut Pool<A, B>, ctx: &mut TxContext) {
+        let dev_balance = balance::value(&pool.dev_balance_a);
+
+        if (dev_balance >= DEV_ROYALTY_FEE_THRESHOLD) {
+            let dev_wallet = pool.dev_wallet;
+            let dev_funds = balance::split(&mut pool.dev_balance_a, dev_balance);
+
+        transfer::public_transfer(coin::from_balance(dev_funds, ctx), dev_wallet);
+        }
+    }
+
+    /// Burns accumulated fees by sending them to the zero address.
+    public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, ctx: &mut TxContext) {
+        let burn_balance = balance::value(&pool.burn_balance_a);
+
+        if (burn_balance >= BURN_THRESHOLD) {
+            let burn_funds: Balance<A> = balance::split(&mut pool.burn_balance_a, burn_balance);
+            let zero_address: address = @0x0000000000000000000000000000000000000000;
+        
+        transfer::public_transfer(coin::from_balance<A>(burn_funds, ctx), zero_address);
+        }
+    }
 
     /* === LP witness === */
 
@@ -436,6 +467,10 @@ module srm_dex_v1::srmV1 {
     balance::join(&mut pool.dev_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
     balance::join(&mut pool.reward_balance_a, balance::split(&mut pool.balance_a, reward_fee_amount));
 
+    // **Distribute accumulated fees after processing the swap**
+    distribute_dev_royalty_fee(pool, ctx);
+    distribute_burn_fee(pool, ctx);
+
     let user_wallet = sender(ctx);
     let timestamp = get_timestamp(clock);
 
@@ -493,6 +528,10 @@ module srm_dex_v1::srmV1 {
     balance::join(&mut pool.burn_balance_a, balance::split(&mut pool.balance_a, burn_fee_amount));
     balance::join(&mut pool.dev_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
     balance::join(&mut pool.reward_balance_a, balance::split(&mut pool.balance_a, reward_fee_amount));
+
+    // **Distribute accumulated fees after processing the swap**
+    distribute_dev_royalty_fee(pool, ctx);
+    distribute_burn_fee(pool, ctx);
 
     let user_wallet = sender(ctx);        
     let timestamp = get_timestamp(clock); 
