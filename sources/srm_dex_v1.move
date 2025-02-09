@@ -1,4 +1,4 @@
-module amm::uniswapV2 {
+module srm_dex_v1::srmV1 {
     use std::type_name::{Self, TypeName};
     use sui::balance::{Self, Balance, Supply};
     use sui::coin::{Self, Coin};
@@ -23,7 +23,15 @@ module amm::uniswapV2 {
 
     /* === constants === */
 
-    const LP_FEE_BASE: u64 = 10_000;
+    const BASIS_POINTS: u64 = 10_000;
+    const SWAP_FEE: u64 = 10;
+
+    /* === Max Fees === */
+
+    const MAX_LP_BUILDER_FEE: u64 = 300; // 3%
+    const MAX_BURN_FEE: u64 = 200; // 2%
+    const MAX_DEV_ROYALTY_FEE: u64 = 100; // 1%
+    const MAX_REWARDS_FEE: u64 = 500; // 5%
 
     /* === math === */
 
@@ -95,8 +103,15 @@ module amm::uniswapV2 {
         balance_a: Balance<A>,
         balance_b: Balance<B>,
         lp_supply: Supply<LP<A, B>>,
-        /// Fees for liquidity provider expressed in points (30 point is 0.3%)
-        fee_points: u64,
+        lp_builder_fee: u64,
+        burn_fee: u64,
+        dev_royalty_fee: u64,
+        rewards_fee: u64,
+        swap_balance_a: Balance<A>,
+        burn_balance_a: Balance<A>,
+        dev_balance_a: Balance<A>,
+        reward_balance_a: Balance<A>,
+        dev_wallet: address
     }
 
     public fun pool_balances<A, B>(pool: &Pool<A, B>): (u64, u64, u64) {
@@ -108,7 +123,7 @@ module amm::uniswapV2 {
     }
 
     public fun pool_fees<A, B>(pool: &Pool<A, B>): u64 {
-        pool.fee_points
+        pool.lp_builder_fee
     }
 
     /* === Factory === */
@@ -187,7 +202,7 @@ module amm::uniswapV2 {
             balance_a: init_a,
             balance_b: init_b,
             lp_supply: balance::create_supply(LP<A, B> {}),
-            fee_points: 30, // 0.3%
+            lp_builder_fee: 30, // 0.3%
         };
 
         // mint initial lp tokens
@@ -329,7 +344,7 @@ module amm::uniswapV2 {
         let pool_a_amount = balance::value(&pool.balance_a);
         let pool_b_amount = balance::value(&pool.balance_b);
 
-        let out_amount = calc_swap_out(input_amount, pool_a_amount, pool_b_amount, pool.fee_points);
+        let out_amount = calc_swap_out(input_amount, pool_a_amount, pool_b_amount, pool.lp_builder_fee);
 
         assert!(out_amount >= min_out, EExcessiveSlippage);
 
@@ -357,7 +372,7 @@ module amm::uniswapV2 {
         let pool_b_amount = balance::value(&pool.balance_b);
         let pool_a_amount = balance::value(&pool.balance_a);
 
-        let out_amount = calc_swap_out(input_amount, pool_b_amount, pool_a_amount, pool.fee_points);
+        let out_amount = calc_swap_out(input_amount, pool_b_amount, pool_a_amount, pool.lp_builder_fee);
 
         assert!(out_amount >= min_out, EExcessiveSlippage);
 
@@ -376,17 +391,24 @@ module amm::uniswapV2 {
         balance::split(&mut pool.balance_a, out_amount)
     }
 
-    /// Calclates swap result and fees based on the input amount and current pool state.
-    fun calc_swap_out(input_amount: u64, input_pool_amount: u64, out_pool_amount: u64, fee_points: u64): u64 {
-        // calc out value
-        let fee_amount = ceil_muldiv(input_amount, fee_points, LP_FEE_BASE);
-        let input_amount_after_fee = input_amount - fee_amount;
-        // (out_pool_amount - out_amount) * (input_pool_amount + input_amount_after_fee) = out_pool_amount * input_pool_amount
-        // (out_pool_amount - out_amount) / out_pool_amount = input_pool_amount / (input_pool_amount + input_amount_after_fee)
-        // out_amount / out_pool_amount = input_amount_after_fee / (input_pool_amount + input_amount_after_fee)
-        let out_amount = muldiv(input_amount_after_fee, out_pool_amount, input_pool_amount + input_amount_after_fee);
+    fun calc_swap_out(
+        input_amount: u64, 
+        input_pool_amount: u64, 
+        out_pool_amount: u64, 
+        lp_builder_fee: u64
+    ): (u64, u64, u64) {
+        // Step 1: Calculate 50% of LP fee from amount_in
+        let lp_builder_fee_amount_in = ceil_muldiv(input_amount, lp_builder_fee, 2 * BASIS_POINTS);
+        let adjusted_amount_in = input_amount - lp_builder_fee_amount_in;
 
-        out_amount
+        // Step 2: Calculate amount_out based on adjusted input
+        let amount_out = muldiv(adjusted_amount_in, out_pool_amount, input_pool_amount + adjusted_amount_in);
+
+        // Step 3: Calculate 50% of LP fee from amount_out
+        let lp_builder_fee_amount_out = ceil_muldiv(amount_out, lp_builder_fee, 2 * BASIS_POINTS);
+        let final_amount_out = amount_out - lp_builder_fee_amount_out;
+
+        (final_amount_out, lp_builder_fee_amount_in, lp_builder_fee_amount_out)
     }
 
     /* === with coin === */

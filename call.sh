@@ -13,7 +13,7 @@ KYRINCODE_COIN_TYPE=0x78738d78352565548776fbd8ca71ab21c5c71773ce1c15738930f78870
 # # balance: 100000000
 # KYRINCODE_COIN=0x19c46cebbf04f3ec3cf7eda9759578c6329b1bff7abbf7e1acd9ab71669f6d46
 # sui client call --package $PACKAGE_ID \
-#                 --module uniswapV2 \
+#                 --module srmV1 \
 #                 --function create_pool_with_coins_and_transfer_lp_to_sender \
 #                 --type-args $KYRINCODE_FAUCET_COIN_TYPE $KYRINCODE_COIN_TYPE \
 #                 --args $FACTORY $KYRINCODE_FAUCET_COIN $KYRINCODE_COIN \
@@ -25,7 +25,7 @@ POOL=0x0afc17d63ec799d5b1ad1d6be37ac86c8f4d12a16334b0ea6688d77fe22a0c82
 KYRINCODE_COIN=0x67af79f8f414a1c965f6174dd987ddf3333d1aec04598a7b90c527c337d47ceb
 MIN_OUT=0
 sui client call --package $PACKAGE_ID \
-                --module uniswapV2 \
+                --module srmV1 \
                 --function swap_b_for_a_with_coin_and_transfer_to_sender \
                 --type-args $KYRINCODE_FAUCET_COIN_TYPE $KYRINCODE_COIN_TYPE \
                 --args $POOL $KYRINCODE_COIN $MIN_OUT \

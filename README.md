@@ -1,7 +1,7 @@
-A simple Sui Move version AMM Dex based on the logic of UniswapV2.
+A simple Sui Move version AMM Dex based on the logic of srmV1.
 
 ## Introduction
-+ This module implements the factory and pool logic of UniswapV2 where anyone can freely create pair of two coin types, add or remove liquidity, and swap.
++ This module implements the factory and pool logic of srmV1 where anyone can freely create pair of two coin types, add or remove liquidity, and swap.
 + After a `Pool` of two coin types is created, a `PoolItem` will be added to `Factory`'s `table` field, which guarantees there is at most one pool for a pair.
 + The two coin types of a pair are first sorted according to their `type_name`, and then assigned to `PoolItem`'s `a` and `b` fields respectively.
 + Users can add liquidity to the pool according to the current ratio of coin balances. The remaining coin will be returned to the users as well as the LP coin.
