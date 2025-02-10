@@ -23,11 +23,12 @@ module srm_dex_v1::srmV1 {
     const ENoLiquidity: u64 = 4;
     /// Fee exceeds maximum fee amount
     const EInvalidFee: u64 = 5;
+    /// Caller is not authorized to perform this action.
+    const EUnauthorized: u64 = 6;
 
     /* === constants === */
 
     const BASIS_POINTS: u64 = 10_000;
-    const SWAP_FEE: u64 = 10;
 
     /* === Max Fees === */
 
@@ -35,12 +36,13 @@ module srm_dex_v1::srmV1 {
     const MAX_BURN_FEE: u64 = 200; // 2%
     const MAX_DEV_ROYALTY_FEE: u64 = 100; // 1%
     const MAX_REWARDS_FEE: u64 = 500; // 5%
+    const MAX_SWAP_FEE: u64 = 25; // 0.25%
 
     /* === Distribution Thresholds === */
 
-    const DEV_ROYALTY_FEE_THRESHOLD: u64 = 10_000_000_000; // 10 SUI in MIST
+    const DEV_ROYALTY_FEE_THRESHOLD: u64 = 5_000_000_000; // 5 SUI in MIST
     const BURN_THRESHOLD: u64 = 10_000_000_000; // 10 SUI in MIST
-    const SWAP_THRESHOLD: u64 = 1_000_000_000; // 1 SUI in MIST
+    const SWAP_THRESHOLD: u64 = 500_000_000; // 0.5 SUI in MIST
 
     /* === math === */
 
@@ -132,6 +134,46 @@ module srm_dex_v1::srmV1 {
         timestamp: u64
     }
 
+    /* === Admin === */
+
+    /// Config struct to store swap fee and admin address
+    public struct Config has key {
+        id: UID,
+        swap_fee: u64,
+        swap_fee_wallet: address,
+        admin: address
+    }
+
+    public fun get_swap_fee(config: &Config): u64 {
+        config.swap_fee
+    }
+
+    public fun get_swap_fee_wallet(config: &Config): address {
+        config.swap_fee_wallet
+    }
+
+    public fun get_admin(config: &Config): address {
+        config.admin
+    }
+
+    public entry fun update_swap_fee(config: &mut Config, new_fee: u64, caller: address) {
+        assert!(caller == config.admin, EUnauthorized); // ✅ Only admin can update
+        assert!(new_fee <= MAX_SWAP_FEE, EInvalidFee);  // ✅ Ensure new fee does not exceed max limit
+
+        config.swap_fee = new_fee;
+    }
+
+
+    public entry fun update_swap_fee_wallet(config: &mut Config, new_wallet: address, caller: address) {
+        assert!(caller == config.admin, EUnauthorized); // Only admin can update
+        config.swap_fee_wallet = new_wallet;
+    }
+
+    public entry fun update_admin(config: &mut Config, new_admin: address, caller: address) {
+        assert!(caller == config.admin, EUnauthorized); // Only admin can update
+        config.admin = new_admin;
+    }
+    
     /* === Rewards Distribution === */
 
     /// Distributes accumulated dev royalty fees to the developer wallet.
@@ -154,14 +196,15 @@ module srm_dex_v1::srmV1 {
     }
 
     /// Burns accumulated fees by swapping `burn_balance_a` for `balance_b` and burning `balance_b`.
-    public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, ctx: &mut TxContext) {
+    public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, config: &Config, ctx: &mut TxContext) {
         let burn_balance_a = balance::value(&pool.burn_balance_a);
 
         if (burn_balance_a >= BURN_THRESHOLD) {
             let (amount_out_b, swap_fee_amount) = calc_burn_swap_out_b(
                 burn_balance_a,
                 balance::value(&pool.balance_a),
-                balance::value(&pool.balance_b)
+                balance::value(&pool.balance_b),
+                config
             );
 
             let mut burn_funds_a = balance::split(&mut pool.burn_balance_a, burn_balance_a);
@@ -188,14 +231,14 @@ module srm_dex_v1::srmV1 {
     }
 
     /// Burns accumulated fees by locking in the pool struct
-    public fun distribute_swap_fee<A, B>(pool: &mut Pool<A, B>, ctx: &mut TxContext) {
+    public fun distribute_swap_fee<A, B>(pool: &mut Pool<A, B>, config: &Config, ctx: &mut TxContext) {
         let swap_balance = balance::value(&pool.swap_balance_a);
 
         if (swap_balance >= SWAP_THRESHOLD) {
             let swap_funds: Balance<A> = balance::split(&mut pool.swap_balance_a, swap_balance);
-            let admin_address: address = @0xa4704c71a56fbdfb854ef938b87cd7d38c075f51dd3221d4c228a4ede9c6c0c2; // add admin address
+            let swap_fee_wallet = config.swap_fee_wallet;
         
-        transfer::public_transfer(coin::from_balance<A>(swap_funds, ctx), admin_address);
+        transfer::public_transfer(coin::from_balance<A>(swap_funds, ctx), swap_fee_wallet);
         }
     }
 
@@ -324,6 +367,17 @@ module srm_dex_v1::srmV1 {
             table: table::new(ctx),
         };
         transfer::share_object(factory);
+
+        let deployer = sender(ctx);
+
+        let config = Config {
+            id: object::new(ctx),
+            swap_fee: 10,
+            swap_fee_wallet: deployer,
+            admin: deployer
+        };
+
+        transfer::share_object(config);
     }
 
     public fun create_pool<A, B>(
@@ -513,7 +567,8 @@ module srm_dex_v1::srmV1 {
     }
 
     public fun swap_a_for_b<A, B>(
-        pool: &mut Pool<A, B>, 
+        pool: &mut Pool<A, B>,
+        config: &Config, 
         input: Balance<A>, 
         min_out: u64,
         clock: &Clock,
@@ -526,7 +581,8 @@ module srm_dex_v1::srmV1 {
         let pool_a_amount = balance::value(&pool.balance_a);
         let pool_b_amount = balance::value(&pool.balance_b);
 
-        // Retrieve fees from pool (excluding swap_fee since it's a constant)
+        // Retrieve fees from pool and config
+        let swap_fee = config.swap_fee;
         let (lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee) = get_pool_fees(pool);
 
         // Calculate swap result
@@ -540,7 +596,7 @@ module srm_dex_v1::srmV1 {
             reward_fee_amount
         ) = calc_swap_out_b(
             input_amount, pool_a_amount, pool_b_amount, 
-            lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee
+            swap_fee, lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee
         );
 
         assert!(final_out_b >= min_out, EExcessiveSlippage);
@@ -567,8 +623,8 @@ module srm_dex_v1::srmV1 {
 
         // **Distribute accumulated fees after processing the swap**
         distribute_dev_royalty_fee(pool, clock, ctx);
-        distribute_burn_fee(pool, clock, ctx);
-        distribute_swap_fee(pool, ctx);
+        distribute_burn_fee(pool, clock, config, ctx);
+        distribute_swap_fee(pool, config, ctx);
 
         let user_wallet = sender(ctx);
         let timestamp = get_timestamp(clock);
@@ -588,7 +644,8 @@ module srm_dex_v1::srmV1 {
     }
 
     public fun swap_b_for_a<A, B>(
-        pool: &mut Pool<A, B>, 
+        pool: &mut Pool<A, B>,
+        config: &Config, 
         input: Balance<B>, 
         min_out: u64,
         clock: &Clock,
@@ -601,7 +658,8 @@ module srm_dex_v1::srmV1 {
         let pool_b_amount = balance::value(&pool.balance_b);
         let pool_a_amount = balance::value(&pool.balance_a);
 
-        // Retrieve fees from pool
+        // Retrieve fees from pool and config
+        let swap_fee = config.swap_fee;
         let (lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee) = get_pool_fees(pool);
 
         // Calculate swap result
@@ -615,7 +673,7 @@ module srm_dex_v1::srmV1 {
             reward_fee_amount
         ) = calc_swap_out_a(
             input_amount, pool_b_amount, pool_a_amount, 
-            lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee
+            swap_fee, lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee
         );
 
         assert!(final_out_a >= min_out, EExcessiveSlippage);
@@ -641,8 +699,8 @@ module srm_dex_v1::srmV1 {
 
         // **Distribute accumulated fees after processing the swap**
         distribute_dev_royalty_fee(pool, clock, ctx);
-        distribute_burn_fee(pool, clock, ctx);
-        distribute_swap_fee(pool, ctx);
+        distribute_burn_fee(pool, clock, config, ctx);
+        distribute_swap_fee(pool, config, ctx);
 
         let user_wallet = sender(ctx);        
         let timestamp = get_timestamp(clock); 
@@ -663,12 +721,13 @@ module srm_dex_v1::srmV1 {
     fun calc_swap_out_a(
         input_amount_b: u64, 
         pool_balance_b: u64, 
-        pool_balance_a: u64, 
+        pool_balance_a: u64,
+        swap_fee: u64, 
         lp_builder_fee: u64,
         burn_fee: u64,
         dev_royalty_fee: u64,
         rewards_fee: u64
-    ): (u64, u64, u64, u64, u64, u64, u64) { // Now returns 7 values instead of 8
+    ): (u64, u64, u64, u64, u64, u64, u64) { 
         assert!(pool_balance_b > 0 && pool_balance_a > 0, ENoLiquidity); // Prevent division by zero
 
         // Step 1: Apply 50% of LP builder fee on `input_amount_b`
@@ -685,8 +744,8 @@ module srm_dex_v1::srmV1 {
 
 
         // Step 3: Calculate swap fee based on SWAP_FEE constant
-        let swap_fee_amount = if (SWAP_FEE > 0) {
-            ceil_muldiv(amount_out_a, SWAP_FEE, BASIS_POINTS)
+        let swap_fee_amount = if (swap_fee > 0) {
+            ceil_muldiv(amount_out_a, swap_fee, BASIS_POINTS)
         } else { 0 };
 
         // Step 4: Apply burn fee, dev royalty fee, and rewards fee to `amount_out_a`
@@ -729,7 +788,8 @@ module srm_dex_v1::srmV1 {
     fun calc_swap_out_b(
         input_amount_a: u64, 
         pool_balance_a: u64, 
-        pool_balance_b: u64, 
+        pool_balance_b: u64,
+        swap_fee: u64, 
         lp_builder_fee: u64,
         burn_fee: u64,
         dev_royalty_fee: u64,
@@ -738,8 +798,8 @@ module srm_dex_v1::srmV1 {
         assert!(pool_balance_a > 0 && pool_balance_b > 0, ENoLiquidity); // Prevent division by zero
         
         // Step 1: Calculate all fees on `input_amount_a`
-        let swap_fee_amount = if (SWAP_FEE > 0) {
-            ceil_muldiv(input_amount_a, SWAP_FEE, BASIS_POINTS)
+        let swap_fee_amount = if (swap_fee > 0) {
+            ceil_muldiv(input_amount_a, swap_fee, BASIS_POINTS)
         } else { 0 };
 
         let burn_fee_amount = if (burn_fee > 0) {
@@ -792,13 +852,16 @@ module srm_dex_v1::srmV1 {
     fun calc_burn_swap_out_b(
         input_amount_a: u64, 
         pool_balance_a: u64, 
-        pool_balance_b: u64, 
+        pool_balance_b: u64,
+        config: &Config 
     ): (u64, u64) {
         assert!(pool_balance_a > 0 && pool_balance_b > 0, ENoLiquidity); // Prevent division by zero
         
+        let swap_fee = config.swap_fee;
+
         // Step 1: Calculate all fees on `input_amount_a`
-        let swap_fee_amount = if (SWAP_FEE > 0) {
-            ceil_muldiv(input_amount_a, SWAP_FEE, BASIS_POINTS)
+        let swap_fee_amount = if (swap_fee > 0) {
+            ceil_muldiv(input_amount_a, swap_fee, BASIS_POINTS)
         } else { 0 };
     
         // Step 2: Adjust `input_amount_a` after deducting fees
@@ -939,47 +1002,52 @@ module srm_dex_v1::srmV1 {
 
     public fun swap_a_for_b_with_coin<A, B>(
         pool: &mut Pool<A, B>, 
+        config: &Config,
         input: Coin<A>, 
         min_out: u64, 
         clock: &Clock,
         ctx: &mut TxContext
     ): Coin<B> {
-        let b_out = swap_a_for_b(pool, coin::into_balance(input), min_out, clock, ctx);
+        let b_out = swap_a_for_b(pool, config, coin::into_balance(input), min_out, clock, ctx);
 
         coin::from_balance(b_out, ctx)
     }
 
     public entry fun swap_a_for_b_with_coin_and_transfer_to_sender<A, B>(
         pool: &mut Pool<A, B>, 
+        config: &Config,
         input: Coin<A>, 
         min_out: u64, 
         clock: &Clock,
+        
         ctx: &mut TxContext
     ) {
-        let b_out = swap_a_for_b(pool, coin::into_balance(input), min_out, clock, ctx);
+        let b_out = swap_a_for_b(pool, config, coin::into_balance(input), min_out, clock, ctx);
         transfer::public_transfer(coin::from_balance(b_out, ctx), sender(ctx));
     }
 
     public fun swap_b_for_a_with_coin<A, B>(
         pool: &mut Pool<A, B>, 
+        config: &Config,
         input: Coin<B>, 
         min_out: u64, 
         clock: &Clock,
         ctx: &mut TxContext
     ): Coin<A> {
-        let a_out = swap_b_for_a(pool, coin::into_balance(input), min_out, clock, ctx);
+        let a_out = swap_b_for_a(pool, config, coin::into_balance(input), min_out, clock, ctx);
 
         coin::from_balance(a_out, ctx)
     }
 
     public entry fun swap_b_for_a_with_coin_and_transfer_to_sender<A, B>(
-        pool: &mut Pool<A, B>, 
+        pool: &mut Pool<A, B>,
+        config: &Config, 
         input: Coin<B>, 
         min_out: u64, 
         clock: &Clock,
         ctx: &mut TxContext
     ) {
-        let a_out = swap_b_for_a(pool, coin::into_balance(input), min_out, clock, ctx);
+        let a_out = swap_b_for_a(pool, config, coin::into_balance(input), min_out, clock, ctx);
         transfer::public_transfer(coin::from_balance(a_out, ctx), sender(ctx));
     }
 
