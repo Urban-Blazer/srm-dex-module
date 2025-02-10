@@ -161,19 +161,22 @@ module srm_dex_v1::srmV1 {
         config.admin
     }
 
-    public entry fun update_swap_fee(config: &mut Config, new_fee: u64, caller: address) {
+    public entry fun update_swap_fee(config: &mut Config, new_fee: u64, ctx: &mut TxContext) {
+        let caller = sender(ctx);
         assert!(caller == config.admin, EUnauthorized);
         assert!(new_fee <= MAX_SWAP_FEE, EInvalidFee);
 
         config.swap_fee = new_fee;
     }
 
-    public entry fun update_swap_fee_wallet(config: &mut Config, new_wallet: address, caller: address) {
+    public entry fun update_swap_fee_wallet(config: &mut Config, new_wallet: address, ctx: &mut TxContext) {
+        let caller = sender(ctx);
         assert!(caller == config.admin, EUnauthorized); // Only admin can update
         config.swap_fee_wallet = new_wallet;
     }
 
-    public entry fun update_admin(config: &mut Config, new_admin: address, caller: address) {
+    public entry fun update_admin(config: &mut Config, new_admin: address, ctx: &mut TxContext) {
+        let caller = sender(ctx);
         assert!(caller == config.admin, EUnauthorized); // Only admin can update
         config.admin = new_admin;
     }
