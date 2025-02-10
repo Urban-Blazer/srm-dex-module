@@ -62,6 +62,7 @@ module srm_dex_v1::srmV1 {
         (ceil_div_u128((a as u128) * (b as u128), (c as u128)) as u64)
     }
 
+    #[allow(deprecated_usage)]
     /// Calculates sqrt(a * b).
     fun mulsqrt(a: u64, b: u64): u64 {
         (math::sqrt_u128((a as u128) * (b as u128)) as u64)
@@ -197,7 +198,8 @@ module srm_dex_v1::srmV1 {
             });
         }
     }
-
+    
+    #[allow(unused_variable)]
     /// Burns accumulated fees by swapping `burn_balance_a` for `balance_b` and burning `balance_b`.
     public fun distribute_burn_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, config: &Config, ctx: &mut TxContext) {
         let burn_balance_a = balance::value(&pool.burn_balance_a);
@@ -343,6 +345,7 @@ module srm_dex_v1::srmV1 {
         table::add(&mut factory.pools, item, pool_id);
     }
 
+    #[allow(deprecated_usage)]
     // returns: 0 if a < b; 1 if a == b; 2 if a > b
     public fun cmp_type_names(a: &TypeName, b: &TypeName): u8 {
         let bytes_a = ascii::as_bytes(type_name::borrow_string(a));
@@ -585,6 +588,7 @@ module srm_dex_v1::srmV1 {
         )
     }
 
+    #[allow(unused_variable)]
     public fun swap_a_for_b<A, B>(
         pool: &mut Pool<A, B>,
         config: &Config, 
@@ -662,6 +666,7 @@ module srm_dex_v1::srmV1 {
         balance::split(&mut pool.balance_b, final_out_b)
     }
 
+    #[allow(unused_variable)]
     public fun swap_b_for_a<A, B>(
         pool: &mut Pool<A, B>,
         config: &Config, 
