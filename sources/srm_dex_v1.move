@@ -8,6 +8,7 @@ module srm_dex_v1::srmV1 {
     use sui::table::{Self, Table};
     use sui::tx_context::sender;
     use sui::clock::Clock;
+    use sui::object;
 
     /* === errors === */
 
@@ -46,10 +47,14 @@ module srm_dex_v1::srmV1 {
 
     /* === math === */
 
+    const U64_MAX: u128 = 18_446_744_073_709_551_615;
+
     /// Calculates (a * b) / c. Errors if result doesn't fit into u64.
     fun muldiv(a: u64, b: u64, c: u64): u64 {
-        assert!(c > 0, EZeroInput); // Prevent divide by zero
-        ((((a as u128) * (b as u128)) / (c as u128)) as u64)
+        assert!(c > 0, EZeroInput); // Prevent division by zero
+        let result = ((a as u128) * (b as u128)) / (c as u128);
+        assert!(result <= U64_MAX, EInvalidPair); // ✅ Now it works
+        result as u64
     }
 
     /// Calculates ceil_div((a * b), c). Errors if result doesn't fit into u64.
@@ -157,12 +162,11 @@ module srm_dex_v1::srmV1 {
     }
 
     public entry fun update_swap_fee(config: &mut Config, new_fee: u64, caller: address) {
-        assert!(caller == config.admin, EUnauthorized); // ✅ Only admin can update
-        assert!(new_fee <= MAX_SWAP_FEE, EInvalidFee);  // ✅ Ensure new fee does not exceed max limit
+        assert!(caller == config.admin, EUnauthorized);
+        assert!(new_fee <= MAX_SWAP_FEE, EInvalidFee);
 
         config.swap_fee = new_fee;
     }
-
 
     public entry fun update_swap_fee_wallet(config: &mut Config, new_wallet: address, caller: address) {
         assert!(caller == config.admin, EUnauthorized); // Only admin can update
@@ -279,36 +283,49 @@ module srm_dex_v1::srmV1 {
 
     /// Returns all pool data in a structured format for UI consumption.
     public fun get_pool_info<A, B>(pool: &Pool<A, B>): (
-        u64, u64, u64,    // Balances: Token A, Token B, LP supply
-        u64, u64, u64, u64, // Fees: LP builder, burn, dev royalty, rewards
-        u64, u64, u64, u64, u64, // Fee balances: Swap, burn A, burn B, dev, rewards
-        address // Developer wallet
+        u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64,
+        address
     ) {
         (
-            balance::value(&pool.balance_a),
-            balance::value(&pool.balance_b),
-            balance::supply_value(&pool.lp_supply),
+        balance::value<A>(&pool.balance_a),
+        balance::value<B>(&pool.balance_b),
+        balance::supply_value<LP<A, B>>(&pool.lp_supply),
 
-            pool.lp_builder_fee,
-            pool.burn_fee,
-            pool.dev_royalty_fee,
-            pool.rewards_fee,
+        pool.lp_builder_fee,
+        pool.burn_fee,
+        pool.dev_royalty_fee,
+        pool.rewards_fee,
 
-            balance::value(&pool.swap_balance_a),
-            balance::value(&pool.burn_balance_a),
-            balance::value(&pool.burn_balance_b),
-            balance::value(&pool.dev_balance_a),
-            balance::value(&pool.reward_balance_a),
+        balance::value<A>(&pool.swap_balance_a),
+        balance::value<A>(&pool.burn_balance_a),
+        balance::value<B>(&pool.burn_balance_b),
+        balance::value<A>(&pool.dev_balance_a),
+        balance::value<A>(&pool.reward_balance_a),
 
-            pool.dev_wallet
+        pool.dev_wallet
         )
+    }
+
+    public fun get_pool_id<A, B>(factory: &Factory): ID {
+        let a = type_name::get<A>();
+        let b = type_name::get<B>();
+        assert!(cmp_type_names(&a, &b) == 0, EInvalidPair);
+
+        let item = PoolItem { a, b };
+        assert!(table::contains(&factory.pools, item), ENoLiquidity);
+
+        *(table::borrow(&factory.pools, item)) // ✅ Corrected return type
+    }
+
+    public fun get_pool<A, B>(pool: &Pool<A, B>): &Pool<A, B> {
+        pool
     }
 
     /* === Factory === */
 
     public struct Factory has key {
         id: UID,
-        table: Table<PoolItem, bool>,
+        pools: Table<PoolItem, ID>,
     }
 
     public struct PoolItem has copy, drop, store  {
@@ -316,15 +333,15 @@ module srm_dex_v1::srmV1 {
         b: TypeName
     }
 
-    fun add_pool<A, B>(factory: &mut Factory) {
+    fun add_pool<A, B>(factory: &mut Factory, pool_id: ID) {
         let a = type_name::get<A>();
         let b = type_name::get<B>();
         assert!(cmp_type_names(&a, &b) == 0, EInvalidPair);
 
-        let item = PoolItem{ a, b };
-        assert!(table::contains(&factory.table, item) == false, EPoolAlreadyExists);
+        let item = PoolItem { a, b };
+        assert!(table::contains(&factory.pools, item) == false, EPoolAlreadyExists);
 
-        table::add(&mut factory.table, item, true)
+        table::add(&mut factory.pools, item, pool_id);
     }
 
     // returns: 0 if a < b; 1 if a == b; 2 if a > b
@@ -363,15 +380,15 @@ module srm_dex_v1::srmV1 {
 
     fun init(ctx: &mut TxContext) {
         let factory = Factory { 
-            id: object::new(ctx),
-            table: table::new(ctx),
+            id: object::new(ctx), // ✅ Correct function call
+            pools: table::new<PoolItem, ID>(ctx), // ✅ Explicit table type
         };
         transfer::share_object(factory);
 
         let deployer = sender(ctx);
 
         let config = Config {
-            id: object::new(ctx),
+            id: object::new(ctx), // ✅ Correct function call
             swap_fee: 10,
             swap_fee_wallet: deployer,
             admin: deployer
@@ -399,11 +416,9 @@ module srm_dex_v1::srmV1 {
         assert!(dev_royalty_fee <= MAX_DEV_ROYALTY_FEE, EInvalidFee);
         assert!(rewards_fee <= MAX_REWARDS_FEE, EInvalidFee);
 
-        add_pool<A, B>(factory);
-
     // Create pool
     let mut pool = Pool<A, B> {
-        id: object::new(ctx),
+        id: object::new(ctx), // ✅ Correct function call
         balance_a: init_a,
         balance_b: init_b,
         lp_supply: balance::create_supply(LP<A, B> {}),
@@ -425,13 +440,17 @@ module srm_dex_v1::srmV1 {
         dev_wallet
     };
 
+        let pool_id = object::id(&pool);
+
+        add_pool<A, B>(factory, pool_id);
+
         // Mint initial LP tokens
         let lp_amount = mulsqrt(balance::value(&pool.balance_a), balance::value(&pool.balance_b));
         let lp_balance = balance::increase_supply(&mut pool.lp_supply, lp_amount);
 
         // Emit event
         event::emit(PoolCreated {
-        pool_id: object::id(&pool),
+        pool_id,
         a: type_name::get<A>(),
         b: type_name::get<B>(),
         init_a: balance::value(&pool.balance_a),
@@ -535,6 +554,7 @@ module srm_dex_v1::srmV1 {
 
     public fun remove_liquidity<A, B>(pool: &mut Pool<A, B>, lp_in: Balance<LP<A, B>>, min_a_out: u64, min_b_out: u64): (Balance<A>, Balance<B>) {
         assert!(balance::value(&lp_in) > 0, EZeroInput);
+        assert!(balance::supply_value(&pool.lp_supply) > 0, ENoLiquidity);
 
         // calculate output amounts
         let lp_in_amount = balance::value(&lp_in);
@@ -902,10 +922,9 @@ module srm_dex_v1::srmV1 {
         dev_wallet: address,
         ctx: &mut TxContext
     ): (Coin<A>, Coin<B>, Coin<LP<A, B>>) { 
-    // Split coins into specified amounts
-    let used_a = coin::split(&mut init_a, amount_a, ctx);
-    let used_b = coin::split(&mut init_b, amount_b, ctx);
-
+        // Split coins into specified amounts
+        let used_a = coin::split(&mut init_a, amount_a, ctx);
+        let used_b = coin::split(&mut init_b, amount_b, ctx);
 
         let lp_balance = create_pool(
             factory,
@@ -1050,5 +1069,4 @@ module srm_dex_v1::srmV1 {
         let a_out = swap_b_for_a(pool, config, coin::into_balance(input), min_out, clock, ctx);
         transfer::public_transfer(coin::from_balance(a_out, ctx), sender(ctx));
     }
-
 }
