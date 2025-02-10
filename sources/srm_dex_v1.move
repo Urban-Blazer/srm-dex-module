@@ -46,11 +46,13 @@ module srm_dex_v1::srmV1 {
 
     /// Calculates (a * b) / c. Errors if result doesn't fit into u64.
     fun muldiv(a: u64, b: u64, c: u64): u64 {
+        assert!(c > 0, EZeroInput); // Prevent divide by zero
         ((((a as u128) * (b as u128)) / (c as u128)) as u64)
     }
 
     /// Calculates ceil_div((a * b), c). Errors if result doesn't fit into u64.
     fun ceil_muldiv(a: u64, b: u64, c: u64): u64 {
+        assert!(c > 0, EZeroInput); // Prevent divide by zero
         (ceil_div_u128((a as u128) * (b as u128), (c as u128)) as u64)
     }
 
@@ -667,6 +669,8 @@ module srm_dex_v1::srmV1 {
         dev_royalty_fee: u64,
         rewards_fee: u64
     ): (u64, u64, u64, u64, u64, u64, u64) { // Now returns 7 values instead of 8
+        assert!(pool_balance_b > 0 && pool_balance_a > 0, ENoLiquidity); // Prevent division by zero
+
         // Step 1: Apply 50% of LP builder fee on `input_amount_b`
         let lp_builder_fee_amount_in = if (lp_builder_fee > 0) {
             ceil_muldiv(input_amount_b, lp_builder_fee, 2 * BASIS_POINTS)
@@ -731,6 +735,8 @@ module srm_dex_v1::srmV1 {
         dev_royalty_fee: u64,
         rewards_fee: u64
     ): (u64, u64, u64, u64, u64, u64, u64) { // Now returns 7 values instead of 8
+        assert!(pool_balance_a > 0 && pool_balance_b > 0, ENoLiquidity); // Prevent division by zero
+        
         // Step 1: Calculate all fees on `input_amount_a`
         let swap_fee_amount = if (SWAP_FEE > 0) {
             ceil_muldiv(input_amount_a, SWAP_FEE, BASIS_POINTS)
@@ -788,6 +794,8 @@ module srm_dex_v1::srmV1 {
         pool_balance_a: u64, 
         pool_balance_b: u64, 
     ): (u64, u64) {
+        assert!(pool_balance_a > 0 && pool_balance_b > 0, ENoLiquidity); // Prevent division by zero
+        
         // Step 1: Calculate all fees on `input_amount_a`
         let swap_fee_amount = if (SWAP_FEE > 0) {
             ceil_muldiv(input_amount_a, SWAP_FEE, BASIS_POINTS)
