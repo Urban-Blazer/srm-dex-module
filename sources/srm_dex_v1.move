@@ -40,9 +40,9 @@ module srm_dex_v1::srmV1 {
 
     /* === Distribution Thresholds === */
 
-    const DEV_ROYALTY_FEE_THRESHOLD: u64 = 5_000_000_000; // 5 SUI in MIST
-    const BURN_THRESHOLD: u64 = 10_000_000_000; // 10 SUI in MIST
-    const SWAP_THRESHOLD: u64 = 500_000_000; // 0.5 SUI in MIST
+    const DEV_ROYALTY_FEE_THRESHOLD: u64 = 250_000_000; // 0.25 SUI in MIST
+    const BURN_THRESHOLD: u64 = 1_000_000_000; // 1 SUI in MIST
+    const SWAP_THRESHOLD: u64 = 250_000_000; // 0.25 SUI in MIST
 
     /* === math === */
 
@@ -52,7 +52,7 @@ module srm_dex_v1::srmV1 {
     fun muldiv(a: u64, b: u64, c: u64): u64 {
         assert!(c > 0, EZeroInput); // Prevent division by zero
         let result = ((a as u128) * (b as u128)) / (c as u128);
-        assert!(result <= U64_MAX, EInvalidPair); // ✅ Now it works
+        assert!(result <= U64_MAX, EInvalidPair);
         result as u64
     }
 
@@ -318,7 +318,7 @@ module srm_dex_v1::srmV1 {
         let item = PoolItem { a, b };
         assert!(table::contains(&factory.pools, item), ENoLiquidity);
 
-        *(table::borrow(&factory.pools, item)) // ✅ Corrected return type
+        *(table::borrow(&factory.pools, item))
     }
 
     public fun get_pool<A, B>(pool: &Pool<A, B>): &Pool<A, B> {
@@ -337,7 +337,7 @@ module srm_dex_v1::srmV1 {
         b: TypeName
     }
 
-    fun add_pool<A, B>(factory: &mut Factory, pool_id: ID) {
+     fun add_pool<A, B>(factory: &mut Factory, pool_id: ID) {
         let a = type_name::get<A>();
         let b = type_name::get<B>();
         assert!(cmp_type_names(&a, &b) == 0, EInvalidPair);
@@ -385,15 +385,15 @@ module srm_dex_v1::srmV1 {
 
     fun init(ctx: &mut TxContext) {
         let factory = Factory { 
-            id: object::new(ctx), // ✅ Correct function call
-            pools: table::new<PoolItem, ID>(ctx), // ✅ Explicit table type
+            id: object::new(ctx),
+            pools: table::new<PoolItem, ID>(ctx),
         };
         transfer::share_object(factory);
 
         let deployer = sender(ctx);
 
         let config = Config {
-            id: object::new(ctx), // ✅ Correct function call
+            id: object::new(ctx),
             swap_fee: 10,
             swap_fee_wallet: deployer,
             admin: deployer
@@ -423,7 +423,7 @@ module srm_dex_v1::srmV1 {
 
     // Create pool
     let mut pool = Pool<A, B> {
-        id: object::new(ctx), // ✅ Correct function call
+        id: object::new(ctx),
         balance_a: init_a,
         balance_b: init_b,
         lp_supply: balance::create_supply(LP<A, B> {}),
@@ -1026,54 +1026,88 @@ module srm_dex_v1::srmV1 {
         destroy_zero_or_transfer_balance(b_out, sender, ctx);
     }
 
-    public fun swap_a_for_b_with_coin<A, B>(
-        pool: &mut Pool<A, B>, 
-        config: &Config,
-        input: Coin<A>, 
-        min_out: u64, 
-        clock: &Clock,
-        ctx: &mut TxContext
-    ): Coin<B> {
-        let b_out = swap_a_for_b(pool, config, coin::into_balance(input), min_out, clock, ctx);
+    public fun swap_a_for_b_with_coins<A, B>(
+    pool: &mut Pool<A, B>, 
+    config: &Config,
+    mut input: Coin<A>, 
+    amount_a: u64,
+    min_out: u64, 
+    clock: &Clock,
+    ctx: &mut TxContext
+): (Coin<A>, Coin<B>) { 
+    // Split the specified amount from the input coin
+    let used_a = coin::split(&mut input, amount_a, ctx);
 
-        coin::from_balance(b_out, ctx)
-    }
+    // Perform the swap
+    let b_out = swap_a_for_b(pool, config, coin::into_balance(used_a), min_out, clock, ctx);
 
-    public entry fun swap_a_for_b_with_coin_and_transfer_to_sender<A, B>(
-        pool: &mut Pool<A, B>, 
-        config: &Config,
-        input: Coin<A>, 
-        min_out: u64, 
-        clock: &Clock,
-        
-        ctx: &mut TxContext
-    ) {
-        let b_out = swap_a_for_b(pool, config, coin::into_balance(input), min_out, clock, ctx);
-        transfer::public_transfer(coin::from_balance(b_out, ctx), sender(ctx));
-    }
+    // Return the unused portion of input and the output coin
+    (input, coin::from_balance(b_out, ctx))
+}
 
-    public fun swap_b_for_a_with_coin<A, B>(
-        pool: &mut Pool<A, B>, 
-        config: &Config,
-        input: Coin<B>, 
-        min_out: u64, 
-        clock: &Clock,
-        ctx: &mut TxContext
-    ): Coin<A> {
-        let a_out = swap_b_for_a(pool, config, coin::into_balance(input), min_out, clock, ctx);
+public entry fun swap_a_for_b_with_coins_and_transfer_to_sender<A, B>(
+    pool: &mut Pool<A, B>, 
+    config: &Config,
+    mut input: Coin<A>, 
+    amount_a: u64,
+    min_out: u64, 
+    clock: &Clock,
+    ctx: &mut TxContext
+) {
+    // Split the specified amount from the input coin
+    let used_a = coin::split(&mut input, amount_a, ctx);
 
-        coin::from_balance(a_out, ctx)
-    }
+    // Perform the swap
+    let b_out = swap_a_for_b(pool, config, coin::into_balance(used_a), min_out, clock, ctx);
+    let sender = sender(ctx);
 
-    public entry fun swap_b_for_a_with_coin_and_transfer_to_sender<A, B>(
-        pool: &mut Pool<A, B>,
-        config: &Config, 
-        input: Coin<B>, 
-        min_out: u64, 
-        clock: &Clock,
-        ctx: &mut TxContext
-    ) {
-        let a_out = swap_b_for_a(pool, config, coin::into_balance(input), min_out, clock, ctx);
-        transfer::public_transfer(coin::from_balance(a_out, ctx), sender(ctx));
-    }
+    // Return remaining input back to sender
+    transfer::public_transfer(input, sender);
+
+    // Send output coin to sender
+    transfer::public_transfer(coin::from_balance(b_out, ctx), sender);
+}
+
+public fun swap_b_for_a_with_coins<A, B>(
+    pool: &mut Pool<A, B>, 
+    config: &Config,
+    mut input: Coin<B>, 
+    amount_b: u64,
+    min_out: u64, 
+    clock: &Clock,
+    ctx: &mut TxContext
+): (Coin<B>, Coin<A>) { 
+    // Split the specified amount from the input coin
+    let used_b = coin::split(&mut input, amount_b, ctx);
+
+    // Perform the swap
+    let a_out = swap_b_for_a(pool, config, coin::into_balance(used_b), min_out, clock, ctx);
+
+    // Return the unused portion of input and the output coin
+    (input, coin::from_balance(a_out, ctx))
+}
+
+public entry fun swap_b_for_a_with_coins_and_transfer_to_sender<A, B>(
+    pool: &mut Pool<A, B>, 
+    config: &Config,
+    mut input: Coin<B>, 
+    amount_b: u64,
+    min_out: u64, 
+    clock: &Clock,
+    ctx: &mut TxContext
+) {
+    // Split the specified amount from the input coin
+    let used_b = coin::split(&mut input, amount_b, ctx);
+
+    // Perform the swap
+    let a_out = swap_b_for_a(pool, config, coin::into_balance(used_b), min_out, clock, ctx);
+    let sender = sender(ctx);
+
+    // Return remaining input back to sender
+    transfer::public_transfer(input, sender);
+
+    // Send output coin to sender
+    transfer::public_transfer(coin::from_balance(a_out, ctx), sender);
+}
+
 }
