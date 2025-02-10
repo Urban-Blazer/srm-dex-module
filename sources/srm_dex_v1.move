@@ -8,7 +8,6 @@ module srm_dex_v1::srmV1 {
     use sui::table::{Self, Table};
     use sui::tx_context::sender;
     use sui::clock::Clock;
-    use sui::object;
 
     /* === errors === */
 
