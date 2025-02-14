@@ -86,6 +86,7 @@ module srm_dex_v1::srmV1 {
         init_a: u64,
         init_b: u64,
         lp_minted: u64,
+        locked_lp_balance: u64,
 
         // Fee settings
         lp_builder_fee: u64,
@@ -270,6 +271,7 @@ module srm_dex_v1::srmV1 {
         burn_balance_b: Balance<B>,
         dev_balance_a: Balance<A>,
         reward_balance_a: Balance<A>,
+        locked_lp_balance: Balance<LP<A, B>>,
         dev_wallet: address
     }
 
@@ -440,6 +442,7 @@ module srm_dex_v1::srmV1 {
         burn_balance_b: balance::zero(),
         dev_balance_a: balance::zero(),
         reward_balance_a: balance::zero(),
+        locked_lp_balance: balance::zero(),
 
         // User-specified dev wallet
         dev_wallet
@@ -461,6 +464,7 @@ module srm_dex_v1::srmV1 {
         init_a: balance::value(&pool.balance_a),
         init_b: balance::value(&pool.balance_b),
         lp_minted: lp_amount,
+        locked_lp_balance: balance::value(&pool.locked_lp_balance),
 
         // Include fee settings in the event
         lp_builder_fee,
@@ -476,6 +480,85 @@ module srm_dex_v1::srmV1 {
         transfer::share_object(pool);
 
         lp_balance
+    }
+
+    public fun create_pool_and_lock_lp<A, B>(
+        factory: &mut Factory,
+        init_a: Balance<A>,
+        init_b: Balance<B>,
+        lp_builder_fee: u64,
+        burn_fee: u64,
+        dev_royalty_fee: u64,
+        rewards_fee: u64,
+        dev_wallet: address,
+        ctx: &mut TxContext
+    ) {
+        assert!(balance::value(&init_a) > 0 && balance::value(&init_b) > 0, EZeroInput);
+
+        // Ensure fees do not exceed maximum values
+        assert!(lp_builder_fee <= MAX_LP_BUILDER_FEE, EInvalidFee);
+        assert!(burn_fee <= MAX_BURN_FEE, EInvalidFee);
+        assert!(dev_royalty_fee <= MAX_DEV_ROYALTY_FEE, EInvalidFee);
+        assert!(rewards_fee <= MAX_REWARDS_FEE, EInvalidFee);
+
+    // Create pool
+    let mut pool = Pool<A, B> {
+        id: object::new(ctx),
+        balance_a: init_a,
+        balance_b: init_b,
+        lp_supply: balance::create_supply(LP<A, B> {}),
+
+        // User-specified fees
+        lp_builder_fee,
+        burn_fee,
+        dev_royalty_fee,
+        rewards_fee,
+
+        // Initialize fee balances
+        swap_balance_a: balance::zero(),
+        burn_balance_a: balance::zero(),
+        burn_balance_b: balance::zero(),
+        dev_balance_a: balance::zero(),
+        reward_balance_a: balance::zero(),
+        locked_lp_balance: balance::zero(),
+
+        // User-specified dev wallet
+        dev_wallet
+    };
+
+        let pool_id = object::id(&pool);
+
+        add_pool<A, B>(factory, pool_id);
+
+        // Mint initial LP tokens
+        let lp_amount = mulsqrt(balance::value(&pool.balance_a), balance::value(&pool.balance_b));
+        let lp_balance = balance::increase_supply(&mut pool.lp_supply, lp_amount);
+
+        balance::join(&mut pool.locked_lp_balance, lp_balance);
+
+        // Emit event
+        event::emit(PoolCreated {
+        pool_id,
+        a: type_name::get<A>(),
+        b: type_name::get<B>(),
+        init_a: balance::value(&pool.balance_a),
+        init_b: balance::value(&pool.balance_b),
+        lp_minted: lp_amount,
+        locked_lp_balance: balance::value(&pool.locked_lp_balance),
+
+        // Include fee settings in the event
+        lp_builder_fee,
+        burn_fee,
+        dev_royalty_fee,
+        rewards_fee,
+
+        // Include developer wallet address
+        dev_wallet,
+
+    });
+
+        // Share the pool object
+        transfer::share_object(pool);
     }
 
     public fun add_liquidity<A, B>(pool: &mut Pool<A, B>, mut input_a: Balance<A>, mut input_b: Balance<B>, min_lp_out: u64): (Balance<A>, Balance<B>, Balance<LP<A, B>>) {
@@ -947,6 +1030,48 @@ module srm_dex_v1::srmV1 {
 
         // Return the remaining coin balances to the user
         (init_a, init_b, coin::from_balance(lp_balance, ctx))
+    }
+
+    public entry fun create_pool_and_lock_lp_in_pool<A, B>(
+        factory: &mut Factory,
+        mut init_a: Coin<A>,
+        amount_a: u64,
+        mut init_b: Coin<B>,
+        amount_b: u64,
+        lp_builder_fee: u64,
+        burn_fee: u64,
+        dev_royalty_fee: u64,
+        rewards_fee: u64,
+        dev_wallet: address,
+        ctx: &mut TxContext
+    ) {
+        // Split coins to get exact input amounts
+        let used_a = coin::split(&mut init_a, amount_a, ctx);
+        let used_b = coin::split(&mut init_b, amount_b, ctx);
+
+        // Convert coins into balances and call create_pool_and_lock_lp
+        create_pool_and_lock_lp(
+            factory,
+            coin::into_balance(used_a), 
+            coin::into_balance(used_b), 
+            lp_builder_fee,
+            burn_fee,
+            dev_royalty_fee,
+            rewards_fee,
+            dev_wallet,
+            ctx
+        );
+
+        // Get the sender's address
+        let sender_addr = sender(ctx);
+
+        // Convert remaining coins into balances
+        let remaining_a = coin::into_balance(init_a);
+        let remaining_b = coin::into_balance(init_b);
+
+        // Return remaining balances to sender
+        destroy_zero_or_transfer_balance(remaining_a, sender_addr, ctx);
+        destroy_zero_or_transfer_balance(remaining_b, sender_addr, ctx);
     }
 
     public entry fun create_pool_with_coins_and_transfer_lp_to_sender<A, B>(
