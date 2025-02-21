@@ -33,10 +33,10 @@ module srm_dex_v1::srmV1 {
     /* === Max Fees === */
 
     const MAX_LP_BUILDER_FEE: u64 = 300; // 3%
-    const MAX_BURN_FEE: u64 = 200; // 2%
+    const MAX_BURN_FEE: u64 = 500; // 5%
     const MAX_DEV_ROYALTY_FEE: u64 = 100; // 1%
     const MAX_REWARDS_FEE: u64 = 500; // 5%
-    const MAX_SWAP_FEE: u64 = 25; // 0.25%
+    const MAX_SWAP_FEE: u64 = 100; // 1%
 
     /* === Distribution Thresholds === */
 
@@ -52,14 +52,20 @@ module srm_dex_v1::srmV1 {
     fun muldiv(a: u64, b: u64, c: u64): u64 {
         assert!(c > 0, EZeroInput); // Prevent division by zero
         let result = ((a as u128) * (b as u128)) / (c as u128);
-        assert!(result <= U64_MAX, EInvalidPair);
+        assert!(result <= U64_MAX, EZeroInput);
         result as u64
     }
 
     /// Calculates ceil_div((a * b), c). Errors if result doesn't fit into u64.
     fun ceil_muldiv(a: u64, b: u64, c: u64): u64 {
-        assert!(c > 0, EZeroInput); // Prevent divide by zero
-        (ceil_div_u128((a as u128) * (b as u128), (c as u128)) as u64)
+        assert!(c > 0, EZeroInput); // Prevent division by zero
+    
+        let product = (a as u128) * (b as u128);
+    
+        // Ensure the result will not exceed u64 max when divided
+        assert!(product / (c as u128) <= U64_MAX, EZeroInput);
+
+        (ceil_div_u128(product, c as u128) as u64)
     }
 
     #[allow(deprecated_usage)]
@@ -325,6 +331,10 @@ module srm_dex_v1::srmV1 {
 
     public fun get_pool<A, B>(pool: &Pool<A, B>): &Pool<A, B> {
         pool
+    }
+
+    public fun get_pool_balances<A, B>(pool: &Pool<A, B>): (u64, u64) {
+    (balance::value(&pool.balance_a), balance::value(&pool.balance_b))
     }
 
     /* === Factory === */
@@ -849,7 +859,7 @@ module srm_dex_v1::srmV1 {
 
         // Step 2: Calculate `amount_out_a` based on adjusted input
         let denominator = pool_balance_b + adjusted_amount_in_b;
-        assert!(denominator > 0, EZeroInput);
+        assert!(denominator > 1, ENoLiquidity); 
         let amount_out_a = muldiv(adjusted_amount_in_b, pool_balance_a, denominator);
 
 
@@ -938,7 +948,7 @@ module srm_dex_v1::srmV1 {
 
         // Step 3: Calculate `amount_out_b` from adjusted input
         let denominator = pool_balance_a + adjusted_amount_in_a;
-        assert!(denominator > 0, EZeroInput);
+        assert!(denominator > 1, ENoLiquidity); 
         let amount_out_b = muldiv(adjusted_amount_in_a, pool_balance_b, denominator);
 
         // Step 4: Apply 50% of LP Builder Fee on output
@@ -979,7 +989,7 @@ module srm_dex_v1::srmV1 {
 
         // Step 3: Calculate `amount_out_b` from adjusted input
         let denominator = pool_balance_a + adjusted_amount_in_a;
-        assert!(denominator > 0, EZeroInput);
+        assert!(denominator > 1, ENoLiquidity); 
         let amount_out_b = muldiv(adjusted_amount_in_a, pool_balance_b, denominator);
 
         // Returns:
