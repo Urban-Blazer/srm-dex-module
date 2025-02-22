@@ -76,7 +76,7 @@ module srm_dex_v1::quote {
 }
 
     /// Get swap quote when user inputs `buyAmount`
-    public fun get_swap_quote_by_buy(
+public fun get_swap_quote_by_buy(
     buy_amount: u64, 
     is_a_to_b: bool,
     pool_balance_a: u64,
@@ -118,9 +118,9 @@ module srm_dex_v1::quote {
 
     /// Calculate output when selling token B for token A.
     fun calc_swap_out_a(
-    input_amount_b: u64, 
-    pool_balance_b: u64, 
+    input_amount_b: u64,  
     pool_balance_a: u64,
+    pool_balance_b: u64,
     swap_fee: u64, 
     lp_builder_fee: u64,
     burn_fee: u64,
@@ -171,8 +171,8 @@ module srm_dex_v1::quote {
     /// Reverse calculate required sellAmount given a buyAmount.
     fun calc_reverse_swap_out_a(
     output_amount_a: u64, 
-    pool_balance_b: u64, 
     pool_balance_a: u64,
+    pool_balance_b: u64, 
     swap_fee: u64, 
     lp_builder_fee: u64,
     burn_fee: u64,
@@ -182,35 +182,36 @@ module srm_dex_v1::quote {
     assert!(pool_balance_b > 0 && pool_balance_a > 0, ENoLiquidity);
     assert!(output_amount_a < pool_balance_a, EZeroInput); // Ensure output is less than liquidity
 
-    // ✅ Step 1: Compute Gross Output Including All Fees
-    let swap_fee_amount = if (swap_fee > 0) { ceil_muldiv(output_amount_a, swap_fee, BASIS_POINTS) } else { 0 };
-    let burn_fee_amount = if (burn_fee > 0) { ceil_muldiv(output_amount_a, burn_fee, BASIS_POINTS) } else { 0 };
-    let dev_fee_amount = if (dev_royalty_fee > 0) { ceil_muldiv(output_amount_a, dev_royalty_fee, BASIS_POINTS) } else { 0 };
-    let reward_fee_amount = if (rewards_fee > 0) { ceil_muldiv(output_amount_a, rewards_fee, BASIS_POINTS) } else { 0 };
-    let lp_builder_fee_amount_out = if (lp_builder_fee > 0) { ceil_muldiv(output_amount_a, lp_builder_fee, 2 * BASIS_POINTS) } else { 0 };
+    // ✅ Step 1: Compute LP Builder Fee on the Output Side (50% of LP fee)
+    let lp_builder_fee_amount_out = if (lp_builder_fee > 0) { 
+        ceil_muldiv(output_amount_a, lp_builder_fee, 2 * BASIS_POINTS) 
+    } else { 0 };
 
-    let gross_amount_a = output_amount_a 
-        + swap_fee_amount 
-        + burn_fee_amount 
-        + dev_fee_amount 
-        + reward_fee_amount 
-        + lp_builder_fee_amount_out;
+    let adjusted_output_a = output_amount_a + lp_builder_fee_amount_out;
 
     // ✅ Step 2: Compute Required Base Input Before Input-Side Fees
-    let numerator = gross_amount_a * pool_balance_b;
-    let denominator = pool_balance_a - gross_amount_a;
-    assert!(denominator > 1, ENoLiquidity); 
 
-    let base_input_b = numerator / denominator;
+    let base_input_b = muldiv(adjusted_output_a, pool_balance_b, pool_balance_a + adjusted_output_a);
 
-    // ✅ Step 3: Apply Input LP Builder Fee (only if lp_builder_fee > 0)
+    // ✅ Step 3: Apply Fees to `base_input_b` (THIS IS WHERE IT WAS WRONG BEFORE)
+    let swap_fee_amount = if (swap_fee > 0) { ceil_muldiv(base_input_b, swap_fee, BASIS_POINTS) } else { 0 };
+    let burn_fee_amount = if (burn_fee > 0) { ceil_muldiv(base_input_b, burn_fee, BASIS_POINTS) } else { 0 };
+    let dev_fee_amount = if (dev_royalty_fee > 0) { ceil_muldiv(base_input_b, dev_royalty_fee, BASIS_POINTS) } else { 0 };
+    let reward_fee_amount = if (rewards_fee > 0) { ceil_muldiv(base_input_b, rewards_fee, BASIS_POINTS) } else { 0 };
+    
     let lp_builder_fee_amount_in = if (lp_builder_fee > 0) { 
         ceil_muldiv(base_input_b, lp_builder_fee, 2 * BASIS_POINTS) 
     } else { 0 };
 
-    let final_input_b = base_input_b + lp_builder_fee_amount_in;
+    // ✅ Step 4: Compute Final Input After Adding Fees
+    let final_input_b = base_input_b 
+        + swap_fee_amount 
+        + burn_fee_amount 
+        + dev_fee_amount 
+        + reward_fee_amount 
+        + lp_builder_fee_amount_in;
 
-    // ✅ Step 4: Return All Fees & Final Required Input
+    // ✅ Step 5: Return All Fees & Final Required Input
     (
         final_input_b, 
         lp_builder_fee_amount_in, 
@@ -274,7 +275,8 @@ module srm_dex_v1::quote {
     )
 }
 
-    fun calc_reverse_swap_out_b(
+    /// Reverse calculate required sellAmount given a buyAmount.
+fun calc_reverse_swap_out_b(
     output_amount_b: u64, 
     pool_balance_a: u64, 
     pool_balance_b: u64,
@@ -285,39 +287,38 @@ module srm_dex_v1::quote {
     rewards_fee: u64
 ): (u64, u64, u64, u64, u64, u64, u64) { 
     assert!(pool_balance_a > 0 && pool_balance_b > 0, ENoLiquidity);
-    assert!(output_amount_b < pool_balance_b, EZeroInput); // Ensure output is less than liquidity
+    assert!(output_amount_b < pool_balance_b, EZeroInput);  // ✅ Additional validation
 
-    // ✅ Step 1: Compute Gross Output Including All Fees
-    let swap_fee_amount = if (swap_fee > 0) { ceil_muldiv(output_amount_b, swap_fee, BASIS_POINTS) } else { 0 };
-    let burn_fee_amount = if (burn_fee > 0) { ceil_muldiv(output_amount_b, burn_fee, BASIS_POINTS) } else { 0 };
-    let dev_fee_amount = if (dev_royalty_fee > 0) { ceil_muldiv(output_amount_b, dev_royalty_fee, BASIS_POINTS) } else { 0 };
-    let reward_fee_amount = if (rewards_fee > 0) { ceil_muldiv(output_amount_b, rewards_fee, BASIS_POINTS) } else { 0 };
+    // ✅ Step 1: Compute LP Builder Fee on the Output Side (50% of LP fee)
     let lp_builder_fee_amount_out = if (lp_builder_fee > 0) { 
         ceil_muldiv(output_amount_b, lp_builder_fee, 2 * BASIS_POINTS) 
     } else { 0 };
 
-    let gross_amount_b = output_amount_b 
-        + swap_fee_amount 
-        + burn_fee_amount 
-        + dev_fee_amount 
-        + reward_fee_amount 
-        + lp_builder_fee_amount_out;
+    let adjusted_output_b = output_amount_b + lp_builder_fee_amount_out;
 
     // ✅ Step 2: Compute Required Base Input Before Input-Side Fees
-    let numerator = gross_amount_b * pool_balance_a;
-    let denominator = pool_balance_b - gross_amount_b;
-    assert!(denominator > 0, EZeroInput);
 
-    let base_input_a = numerator / denominator;
+    let base_input_a = muldiv(adjusted_output_b, pool_balance_a, pool_balance_b + adjusted_output_b);    
 
-    // ✅ Step 3: Apply Input LP Builder Fee (only if lp_builder_fee > 0)
+    // ✅ Step 3: Apply Fees to `base_input_a` (THIS IS WHERE IT WAS WRONG)
+    let swap_fee_amount = if (swap_fee > 0) { ceil_muldiv(base_input_a, swap_fee, BASIS_POINTS) } else { 0 };
+    let burn_fee_amount = if (burn_fee > 0) { ceil_muldiv(base_input_a, burn_fee, BASIS_POINTS) } else { 0 };
+    let dev_fee_amount = if (dev_royalty_fee > 0) { ceil_muldiv(base_input_a, dev_royalty_fee, BASIS_POINTS) } else { 0 };
+    let reward_fee_amount = if (rewards_fee > 0) { ceil_muldiv(base_input_a, rewards_fee, BASIS_POINTS) } else { 0 };
+    
     let lp_builder_fee_amount_in = if (lp_builder_fee > 0) { 
         ceil_muldiv(base_input_a, lp_builder_fee, 2 * BASIS_POINTS) 
     } else { 0 };
 
-    let final_input_a = base_input_a + lp_builder_fee_amount_in;
+    // ✅ Step 4: Compute Final Input After Adding Fees
+    let final_input_a = base_input_a 
+        + swap_fee_amount 
+        + burn_fee_amount 
+        + dev_fee_amount 
+        + reward_fee_amount 
+        + lp_builder_fee_amount_in;
 
-    // ✅ Step 4: Return All Fees & Final Required Input
+    // ✅ Step 5: Return All Fees & Final Required Input
     (
         final_input_a, 
         lp_builder_fee_amount_in, 
