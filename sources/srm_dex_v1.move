@@ -406,7 +406,7 @@ module srm_dex_v1::srmV1 {
 
         let config = Config {
             id: object::new(ctx),
-            swap_fee: 10,
+            swap_fee: 100,
             swap_fee_wallet: deployer,
             admin: deployer
         };
