@@ -25,6 +25,8 @@ module srm_dex_v1::srmV1 {
     const EInvalidFee: u64 = 5;
     /// Caller is not authorized to perform this action.
     const EUnauthorized: u64 = 6;
+    // Invalid Despost Amount Create Liquidity
+    const EInvalidDepositAmount: u64 = 7;
 
     /* === constants === */
 
@@ -1055,6 +1057,9 @@ module srm_dex_v1::srmV1 {
     dev_wallet: address,
     ctx: &mut TxContext
 ) {
+    // ✅ Ensure deposit amounts are greater than zero
+    assert!(amount_a > 0, EInvalidDepositAmount);
+    assert!(amount_b > 0, EInvalidDepositAmount);
     let sender_addr = sender(ctx);
 
     // Split coins to get exact input amounts
@@ -1092,6 +1097,9 @@ module srm_dex_v1::srmV1 {
     dev_wallet: address,
     ctx: &mut TxContext
 ) {
+    // ✅ Ensure deposit amounts are greater than zero
+    assert!(amount_a > 0, EInvalidDepositAmount);
+    assert!(amount_b > 0, EInvalidDepositAmount);
     let sender_addr = sender(ctx);
 
     // Split coins into specified amounts
@@ -1144,6 +1152,10 @@ module srm_dex_v1::srmV1 {
 ) {
     let sender = sender(ctx);
 
+    // ✅ Ensure deposit amounts are greater than zero
+    assert!(a_amount > 0, EInvalidDepositAmount);
+    assert!(b_amount > 0, EInvalidDepositAmount);
+
     // Split the requested CoinA and CoinB amounts
     let deposit_a = coin::split(&mut input_a, a_amount, ctx);
     let deposit_b = coin::split(&mut input_b, b_amount, ctx);
@@ -1184,6 +1196,8 @@ module srm_dex_v1::srmV1 {
         min_b_out: u64, 
         ctx: &mut TxContext
     ) {
+        // ✅ Ensure deposit amounts are greater than zero
+        assert!(lp_amount > 0, EInvalidDepositAmount);
         let sender = sender(ctx);
 
         // Split the requested LP amount from lp_in
@@ -1228,6 +1242,8 @@ module srm_dex_v1::srmV1 {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
+        // ✅ Ensure deposit amounts are greater than zero
+        assert!(amount_a > 0, EInvalidDepositAmount);
         // Split the specified amount from the input coin
         let used_a = coin::split(&mut input, amount_a, ctx);
 
@@ -1270,6 +1286,9 @@ module srm_dex_v1::srmV1 {
         clock: &Clock,
         ctx: &mut TxContext
     ) {
+        // ✅ Ensure deposit amounts are greater than zero
+        assert!(amount_b > 0, EInvalidDepositAmount);
+    
         // Split the specified amount from the input coin
         let used_b = coin::split(&mut input, amount_b, ctx);
 
