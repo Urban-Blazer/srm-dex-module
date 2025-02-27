@@ -334,7 +334,7 @@ module srm_dex_v1::srmV1 {
     }
 
     public fun get_pool_balances<A, B>(pool: &Pool<A, B>): (u64, u64) {
-    (balance::value(&pool.balance_a), balance::value(&pool.balance_b))
+        (balance::value(&pool.balance_a), balance::value(&pool.balance_b))
     }
 
     /* === Factory === */
@@ -1043,89 +1043,85 @@ module srm_dex_v1::srmV1 {
     }
 
     public entry fun create_pool_and_lock_lp_in_pool<A, B>(
-        factory: &mut Factory,
-        mut init_a: Coin<A>,
-        amount_a: u64,
-        mut init_b: Coin<B>,
-        amount_b: u64,
-        lp_builder_fee: u64,
-        burn_fee: u64,
-        dev_royalty_fee: u64,
-        rewards_fee: u64,
-        dev_wallet: address,
-        ctx: &mut TxContext
-    ) {
-        // Split coins to get exact input amounts
-        let used_a = coin::split(&mut init_a, amount_a, ctx);
-        let used_b = coin::split(&mut init_b, amount_b, ctx);
+    factory: &mut Factory,
+    mut init_a: Coin<A>,
+    amount_a: u64,
+    mut init_b: Coin<B>,
+    amount_b: u64,
+    lp_builder_fee: u64,
+    burn_fee: u64,
+    dev_royalty_fee: u64,
+    rewards_fee: u64,
+    dev_wallet: address,
+    ctx: &mut TxContext
+) {
+    let sender_addr = sender(ctx);
 
-        // Convert coins into balances and call create_pool_and_lock_lp
-        create_pool_and_lock_lp(
-            factory,
-            coin::into_balance(used_a), 
-            coin::into_balance(used_b), 
-            lp_builder_fee,
-            burn_fee,
-            dev_royalty_fee,
-            rewards_fee,
-            dev_wallet,
-            ctx
-        );
-
-        // Get the sender's address
-        let sender_addr = sender(ctx);
-
-        // Convert remaining coins into balances
-        let remaining_a = coin::into_balance(init_a);
-        let remaining_b = coin::into_balance(init_b);
-
-        // Return remaining balances to sender
-        destroy_zero_or_transfer_balance(remaining_a, sender_addr, ctx);
-        destroy_zero_or_transfer_balance(remaining_b, sender_addr, ctx);
-    }
-
-    public entry fun create_pool_with_coins_and_transfer_lp_to_sender<A, B>(
-        factory: &mut Factory,
-        mut init_a: Coin<A>,
-        amount_a: u64,
-        mut init_b: Coin<B>,
-        amount_b: u64,
-        lp_builder_fee: u64,
-        burn_fee: u64,
-        dev_royalty_fee: u64,
-        rewards_fee: u64,
-        dev_wallet: address,
-        ctx: &mut TxContext
-    ) {
-
-        // Split coins into specified amounts
+    // Split coins to get exact input amounts
     let used_a = coin::split(&mut init_a, amount_a, ctx);
     let used_b = coin::split(&mut init_b, amount_b, ctx);
 
+    // Convert coins into balances and call create_pool_and_lock_lp
+    create_pool_and_lock_lp(
+        factory,
+        coin::into_balance(used_a), 
+        coin::into_balance(used_b), 
+        lp_builder_fee,
+        burn_fee,
+        dev_royalty_fee,
+        rewards_fee,
+        dev_wallet,
+        ctx
+    );
 
-        let lp_balance = create_pool(
-            factory,
-            coin::into_balance(used_a), 
+    // Return remaining CoinA and CoinB to sender (or destroy if zero)
+    destroy_zero_or_transfer_balance(coin::into_balance(init_a), sender_addr, ctx);
+    destroy_zero_or_transfer_balance(coin::into_balance(init_b), sender_addr, ctx);
+}
+
+    public entry fun create_pool_with_coins_and_transfer_lp_to_sender<A, B>(
+    factory: &mut Factory,
+    mut init_a: Coin<A>,
+    amount_a: u64,
+    mut init_b: Coin<B>,
+    amount_b: u64,
+    lp_builder_fee: u64,
+    burn_fee: u64,
+    dev_royalty_fee: u64,
+    rewards_fee: u64,
+    dev_wallet: address,
+    ctx: &mut TxContext
+) {
+    let sender_addr = sender(ctx);
+
+    // Split coins into specified amounts
+    let used_a = coin::split(&mut init_a, amount_a, ctx);
+    let used_b = coin::split(&mut init_b, amount_b, ctx);
+
+    // Create the pool using only the specified coin amounts
+    let lp_balance = create_pool(
+        factory,
+        coin::into_balance(used_a), 
         coin::into_balance(used_b),
-            lp_builder_fee,
-            burn_fee,
-            dev_royalty_fee,
-            rewards_fee,
-            dev_wallet,
-            ctx
-        );
-        let sender_addr = sender(ctx);
+        lp_builder_fee,
+        burn_fee,
+        dev_royalty_fee,
+        rewards_fee,
+        dev_wallet,
+        ctx
+    );
 
+    // Convert remaining CoinA and CoinB into Balances before transferring
+    let remaining_a_balance = coin::into_balance(init_a);
+    let remaining_b_balance = coin::into_balance(init_b);
 
-        // Return remaining balances to sender
-        let remaining_a = coin::into_balance(init_a);
-        let remaining_b = coin::into_balance(init_b);
-        destroy_zero_or_transfer_balance(remaining_a, sender_addr, ctx);
-        destroy_zero_or_transfer_balance(remaining_b, sender_addr, ctx);
+    // Return remaining CoinA and CoinB to sender (or destroy if zero)
+    destroy_zero_or_transfer_balance(remaining_a_balance, sender_addr, ctx);
+    destroy_zero_or_transfer_balance(remaining_b_balance, sender_addr, ctx);
 
-        // Transfer LP tokens to sender
-        transfer::public_transfer(coin::from_balance(lp_balance, ctx), sender_addr);
-    }
+    // Transfer LP tokens to sender (or destroy if zero)
+    destroy_zero_or_transfer_balance(lp_balance, sender_addr, ctx);
+}
 
     public fun add_liquidity_with_coins<A, B>(pool: &mut Pool<A, B>, input_a: Coin<A>, input_b: Coin<B>, min_lp_out: u64, ctx: &mut TxContext): (Coin<A>, Coin<B>, Coin<LP<A, B>>) {
         let (remaining_a, remaining_b, lp) = add_liquidity(pool, coin::into_balance(input_a), coin::into_balance(input_b), min_lp_out);
@@ -1137,13 +1133,39 @@ module srm_dex_v1::srmV1 {
         )
     }
 
-    public entry fun add_liquidity_with_coins_and_transfer_to_sender<A, B>(pool: &mut Pool<A, B>, input_a: Coin<A>, input_b: Coin<B>, min_lp_out: u64, ctx: &mut TxContext) {
-        let (remaining_a, remaining_b, lp) = add_liquidity(pool, coin::into_balance(input_a), coin::into_balance(input_b), min_lp_out);
-        let sender = sender(ctx);
-        destroy_zero_or_transfer_balance(remaining_a, sender, ctx);
-        destroy_zero_or_transfer_balance(remaining_b, sender, ctx);
-        destroy_zero_or_transfer_balance(lp, sender, ctx);
-    }
+    public entry fun add_liquidity_with_coins_and_transfer_to_sender<A, B>(
+    pool: &mut Pool<A, B>, 
+    mut input_a: Coin<A>, 
+    a_amount: u64,  
+    mut input_b: Coin<B>, 
+    b_amount: u64,  
+    min_lp_out: u64, 
+    ctx: &mut TxContext
+) {
+    let sender = sender(ctx);
+
+    // Split the requested CoinA and CoinB amounts
+    let deposit_a = coin::split(&mut input_a, a_amount, ctx);
+    let deposit_b = coin::split(&mut input_b, b_amount, ctx);
+
+    // Add liquidity using only the specified amounts
+    let (remaining_a, remaining_b, lp) = add_liquidity(pool, coin::into_balance(deposit_a), coin::into_balance(deposit_b), min_lp_out);
+
+    // Transfer resulting LP tokens to sender
+    destroy_zero_or_transfer_balance(lp, sender, ctx);
+
+    // Convert remaining CoinA and CoinB back from balance
+    let remaining_a_coin = coin::from_balance(remaining_a, ctx);
+    let remaining_b_coin = coin::from_balance(remaining_b, ctx);
+
+    // Return remaining CoinA and CoinB to sender or destroy if zero
+    destroy_zero_or_transfer_balance(coin::into_balance(input_a), sender, ctx);
+    destroy_zero_or_transfer_balance(coin::into_balance(input_b), sender, ctx);
+    destroy_zero_or_transfer_balance(coin::into_balance(remaining_a_coin), sender, ctx);
+    destroy_zero_or_transfer_balance(coin::into_balance(remaining_b_coin), sender, ctx);
+}
+
+
 
     public fun remove_liquidity_with_coins<A, B>(pool: &mut Pool<A, B>, lp_in: Coin<LP<A, B>>, min_a_out: u64, min_b_out: u64, ctx: &mut TxContext): (Coin<A>, Coin<B>) {
         let (a_out, b_out) = remove_liquidity(pool, coin::into_balance(lp_in), min_a_out, min_b_out);
@@ -1154,95 +1176,112 @@ module srm_dex_v1::srmV1 {
         )
     }
 
-    public entry fun remove_liquidity_with_coins_and_transfer_to_sender<A, B>(pool: &mut Pool<A, B>, lp_in: Coin<LP<A, B>>, min_a_out: u64, min_b_out: u64, ctx: &mut TxContext) {
-        let (a_out, b_out) = remove_liquidity(pool, coin::into_balance(lp_in), min_a_out, min_b_out);
+    public entry fun remove_liquidity_with_coins_and_transfer_to_sender<A, B>(
+        pool: &mut Pool<A, B>, 
+        mut lp_in: Coin<LP<A, B>>,  // Declare lp_in as mutable
+        lp_amount: u64,  // Amount of LP tokens to remove
+        min_a_out: u64, 
+        min_b_out: u64, 
+        ctx: &mut TxContext
+    ) {
         let sender = sender(ctx);
+
+        // Split the requested LP amount from lp_in
+        let lp_used = coin::split(&mut lp_in, lp_amount, ctx);  // Now valid!
+
+        // Remove liquidity using the specified LP amount
+        let (a_out, b_out) = remove_liquidity(pool, coin::into_balance(lp_used), min_a_out, min_b_out);
+
+        // Transfer resulting tokens to the sender
         destroy_zero_or_transfer_balance(a_out, sender, ctx);
         destroy_zero_or_transfer_balance(b_out, sender, ctx);
+
+        // Return the remaining LP coins to the sender
+        destroy_zero_or_transfer_balance(coin::into_balance(lp_in), sender, ctx);
     }
 
     public fun swap_a_for_b_with_coins<A, B>(
-    pool: &mut Pool<A, B>, 
-    config: &Config,
-    mut input: Coin<A>, 
-    amount_a: u64,
-    min_out: u64, 
-    clock: &Clock,
-    ctx: &mut TxContext
-): (Coin<A>, Coin<B>) { 
-    // Split the specified amount from the input coin
-    let used_a = coin::split(&mut input, amount_a, ctx);
+        pool: &mut Pool<A, B>, 
+        config: &Config,
+        mut input: Coin<A>, 
+        amount_a: u64,
+        min_out: u64, 
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): (Coin<A>, Coin<B>) { 
+        // Split the specified amount from the input coin
+        let used_a = coin::split(&mut input, amount_a, ctx);
 
-    // Perform the swap
-    let b_out = swap_a_for_b(pool, config, coin::into_balance(used_a), min_out, clock, ctx);
+        // Perform the swap
+        let b_out = swap_a_for_b(pool, config, coin::into_balance(used_a), min_out, clock, ctx);
 
-    // Return the unused portion of input and the output coin
-    (input, coin::from_balance(b_out, ctx))
-}
+        // Return the unused portion of input and the output coin
+        (input, coin::from_balance(b_out, ctx))
+    }
 
-public entry fun swap_a_for_b_with_coins_and_transfer_to_sender<A, B>(
-    pool: &mut Pool<A, B>, 
-    config: &Config,
-    mut input: Coin<A>, 
-    amount_a: u64,
-    min_out: u64, 
-    clock: &Clock,
-    ctx: &mut TxContext
-) {
-    // Split the specified amount from the input coin
-    let used_a = coin::split(&mut input, amount_a, ctx);
+    public entry fun swap_a_for_b_with_coins_and_transfer_to_sender<A, B>(
+        pool: &mut Pool<A, B>, 
+        config: &Config,
+        mut input: Coin<A>, 
+        amount_a: u64,
+        min_out: u64, 
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        // Split the specified amount from the input coin
+        let used_a = coin::split(&mut input, amount_a, ctx);
 
-    // Perform the swap
-    let b_out = swap_a_for_b(pool, config, coin::into_balance(used_a), min_out, clock, ctx);
-    let sender = sender(ctx);
+        // Perform the swap
+        let b_out = swap_a_for_b(pool, config, coin::into_balance(used_a), min_out, clock, ctx);
+        let sender = sender(ctx);
 
-    // Return remaining input back to sender
-    transfer::public_transfer(input, sender);
+        // Return remaining input back to sender
+        destroy_zero_or_transfer_balance(coin::into_balance(input), sender, ctx);
 
-    // Send output coin to sender
-    transfer::public_transfer(coin::from_balance(b_out, ctx), sender);
-}
+        // Send output coin to sender
+        destroy_zero_or_transfer_balance(b_out, sender, ctx);
+    }
 
-public fun swap_b_for_a_with_coins<A, B>(
-    pool: &mut Pool<A, B>, 
-    config: &Config,
-    mut input: Coin<B>, 
-    amount_b: u64,
-    min_out: u64, 
-    clock: &Clock,
-    ctx: &mut TxContext
-): (Coin<B>, Coin<A>) { 
-    // Split the specified amount from the input coin
-    let used_b = coin::split(&mut input, amount_b, ctx);
+    public fun swap_b_for_a_with_coins<A, B>(
+        pool: &mut Pool<A, B>, 
+        config: &Config,
+        mut input: Coin<B>, 
+        amount_b: u64,
+        min_out: u64, 
+        clock: &Clock,
+        ctx: &mut TxContext
+    ): (Coin<B>, Coin<A>) { 
+        // Split the specified amount from the input coin
+        let used_b = coin::split(&mut input, amount_b, ctx);
 
-    // Perform the swap
-    let a_out = swap_b_for_a(pool, config, coin::into_balance(used_b), min_out, clock, ctx);
+        // Perform the swap
+        let a_out = swap_b_for_a(pool, config, coin::into_balance(used_b), min_out, clock, ctx);
 
-    // Return the unused portion of input and the output coin
-    (input, coin::from_balance(a_out, ctx))
-}
+        // Return the unused portion of input and the output coin
+        (input, coin::from_balance(a_out, ctx))
+    }
 
-public entry fun swap_b_for_a_with_coins_and_transfer_to_sender<A, B>(
-    pool: &mut Pool<A, B>, 
-    config: &Config,
-    mut input: Coin<B>, 
-    amount_b: u64,
-    min_out: u64, 
-    clock: &Clock,
-    ctx: &mut TxContext
-) {
-    // Split the specified amount from the input coin
-    let used_b = coin::split(&mut input, amount_b, ctx);
+    public entry fun swap_b_for_a_with_coins_and_transfer_to_sender<A, B>(
+        pool: &mut Pool<A, B>, 
+        config: &Config,
+        mut input: Coin<B>, 
+        amount_b: u64,
+        min_out: u64, 
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        // Split the specified amount from the input coin
+        let used_b = coin::split(&mut input, amount_b, ctx);
 
-    // Perform the swap
-    let a_out = swap_b_for_a(pool, config, coin::into_balance(used_b), min_out, clock, ctx);
-    let sender = sender(ctx);
+        // Perform the swap
+        let a_out = swap_b_for_a(pool, config, coin::into_balance(used_b), min_out, clock, ctx);
+        let sender = sender(ctx);
 
-    // Return remaining input back to sender
-    transfer::public_transfer(input, sender);
+        // Return remaining input back to sender
+        destroy_zero_or_transfer_balance(coin::into_balance(input), sender, ctx);
 
-    // Send output coin to sender
-    transfer::public_transfer(coin::from_balance(a_out, ctx), sender);
-}
+        // Send output coin to sender
+        destroy_zero_or_transfer_balance(a_out, sender, ctx);
+    }
 
 }
