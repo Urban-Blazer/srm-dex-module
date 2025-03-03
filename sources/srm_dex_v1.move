@@ -27,6 +27,8 @@ module srm_dex_v1::srmV1 {
     const EUnauthorized: u64 = 6;
     // Invalid Despost Amount Create Liquidity
     const EInvalidDepositAmount: u64 = 7;
+    // Not Enough Rewards to Distrbute
+    const ENotEnoughRewards: u64 = 8;
 
     /* === constants === */
 
@@ -36,13 +38,13 @@ module srm_dex_v1::srmV1 {
 
     const MAX_LP_BUILDER_FEE: u64 = 300; // 3%
     const MAX_BURN_FEE: u64 = 500; // 5%
-    const MAX_DEV_ROYALTY_FEE: u64 = 100; // 1%
+    const MAX_CREATOR_ROYALTY_FEE: u64 = 100; // 1%
     const MAX_REWARDS_FEE: u64 = 500; // 5%
     const MAX_SWAP_FEE: u64 = 100; // 1%
 
     /* === Distribution Thresholds === */
 
-    const DEV_ROYALTY_FEE_THRESHOLD: u64 = 250_000_000; // 0.25 SUI in MIST
+    const CREATOR_ROYALTY_FEE_THRESHOLD: u64 = 250_000_000; // 0.25 SUI in MIST
     const BURN_THRESHOLD: u64 = 1_000_000_000; // 1 SUI in MIST
     const SWAP_THRESHOLD: u64 = 250_000_000; // 0.25 SUI in MIST
 
@@ -99,11 +101,11 @@ module srm_dex_v1::srmV1 {
         // Fee settings
         lp_builder_fee: u64,
         burn_fee: u64,
-        dev_royalty_fee: u64,
+        creator_royalty_fee: u64,
         rewards_fee: u64,
 
         // Developer wallet
-        dev_wallet: address,
+        creator_royalty_wallet: address,
     }
 
     public struct LiquidityAdded has copy, drop {
@@ -136,7 +138,7 @@ module srm_dex_v1::srmV1 {
 
     public struct DevRoyaltyFeeDistributed has copy, drop {
         pool_id: ID,
-        dev_wallet: address,
+        creator_royalty_wallet: address,
         amount: u64,
         timestamp: u64
     }
@@ -148,6 +150,17 @@ module srm_dex_v1::srmV1 {
         timestamp: u64
     }
 
+    public struct RewardsProcessing has copy, drop {
+        pool_id: ID,
+        recipient: address,
+        amount: u64
+    }
+
+    public struct RewardsReturned has copy, drop {
+        pool_id: ID,
+        amount: u64
+    }
+
     /* === Admin === */
 
     /// Config struct to store swap fee and admin address
@@ -155,7 +168,8 @@ module srm_dex_v1::srmV1 {
         id: UID,
         swap_fee: u64,
         swap_fee_wallet: address,
-        admin: address
+        admin: address,
+        rewards_manager: address
     }
 
     public fun get_swap_fee(config: &Config): u64 {
@@ -189,22 +203,73 @@ module srm_dex_v1::srmV1 {
         assert!(caller == config.admin, EUnauthorized); // Only admin can update
         config.admin = new_admin;
     }
+
+    public entry fun update_rewards_manager(config: &mut Config, new_manager: address, ctx: &mut TxContext) {
+        let caller = sender(ctx);
+        assert!(caller == config.admin, EUnauthorized); // Only admin can update
+        config.rewards_manager = new_manager;
+    }
     
     /* === Rewards Distribution === */
 
+    public entry fun withdraw_rewards<A, B>(
+        pool: &mut Pool<A, B>, 
+        config: &Config, 
+        amount: u64, 
+        ctx: &mut TxContext
+    ) {
+        let caller = sender(ctx);
+        assert!(caller == config.rewards_manager, EUnauthorized);
+
+        let available_rewards = balance::value(&pool.reward_balance_a);
+        assert!(amount > 0 && amount <= available_rewards, ENotEnoughRewards);
+
+        let rewards = balance::split(&mut pool.reward_balance_a, amount);
+
+        // ✅ Use helper function to destroy or transfer balance
+        destroy_zero_or_transfer_balance(rewards, config.rewards_manager, ctx);
+
+        // ✅ Emit event for tracking withdrawals
+        event::emit(RewardsProcessing {
+            pool_id: object::id(pool),
+            recipient: config.rewards_manager,
+            amount: amount
+        });
+    }
+
+    public entry fun return_rewards_to_pool<A, B>(
+        pool: &mut Pool<A, B>, 
+        config: &Config, 
+        rewards_coin: Coin<A>,
+        ctx: &mut TxContext
+    ) {
+        let caller = sender(ctx);
+        assert!(caller == config.rewards_manager, EUnauthorized); // Only rewards_manager can call
+
+        // ✅ Convert Coin into Balance and return to reward_balance_a
+        let rewards_balance = coin::into_balance(rewards_coin);
+        balance::join(&mut pool.reward_balance_a, rewards_balance);
+
+        // ✅ Emit event for tracking returns
+        event::emit(RewardsReturned {
+            pool_id: object::id(pool),
+            amount: balance::value(&pool.reward_balance_a)
+        });
+    }
+
     /// Distributes accumulated dev royalty fees to the developer wallet.
-    public fun distribute_dev_royalty_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, ctx: &mut TxContext) {
+    public fun distribute_creator_royalty_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, ctx: &mut TxContext) {
         let dev_balance = balance::value(&pool.dev_balance_a);
 
-        if (dev_balance >= DEV_ROYALTY_FEE_THRESHOLD) {
-            let dev_wallet = pool.dev_wallet;
+        if (dev_balance >= CREATOR_ROYALTY_FEE_THRESHOLD) {
+            let creator_royalty_wallet = pool.creator_royalty_wallet;
             let dev_funds = balance::split(&mut pool.dev_balance_a, dev_balance);
 
-            transfer::public_transfer(coin::from_balance(dev_funds, ctx), dev_wallet);
+            transfer::public_transfer(coin::from_balance(dev_funds, ctx), creator_royalty_wallet);
 
             event::emit(DevRoyaltyFeeDistributed {
                 pool_id: object::id(pool),
-                dev_wallet: dev_wallet,
+                creator_royalty_wallet: creator_royalty_wallet,
                 amount: dev_balance,
                 timestamp: get_timestamp(clock)
             });
@@ -272,7 +337,7 @@ module srm_dex_v1::srmV1 {
         lp_supply: Supply<LP<A, B>>,
         lp_builder_fee: u64,
         burn_fee: u64,
-        dev_royalty_fee: u64,
+        creator_royalty_fee: u64,
         rewards_fee: u64,
         swap_balance_a: Balance<A>,
         burn_balance_a: Balance<A>,
@@ -280,7 +345,7 @@ module srm_dex_v1::srmV1 {
         dev_balance_a: Balance<A>,
         reward_balance_a: Balance<A>,
         locked_lp_balance: Balance<LP<A, B>>,
-        dev_wallet: address
+        creator_royalty_wallet: address
     }
 
     public fun pool_balances<A, B>(pool: &Pool<A, B>): (u64, u64, u64) {
@@ -292,7 +357,7 @@ module srm_dex_v1::srmV1 {
     }
 
     public fun get_pool_fees<A, B>(pool: &Pool<A, B>): (u64, u64, u64, u64) {
-        (pool.lp_builder_fee, pool.burn_fee, pool.dev_royalty_fee, pool.rewards_fee)
+        (pool.lp_builder_fee, pool.burn_fee, pool.creator_royalty_fee, pool.rewards_fee)
     }
 
     /// Returns all pool data in a structured format for UI consumption.
@@ -307,7 +372,7 @@ module srm_dex_v1::srmV1 {
 
         pool.lp_builder_fee,
         pool.burn_fee,
-        pool.dev_royalty_fee,
+        pool.creator_royalty_fee,
         pool.rewards_fee,
 
         balance::value<A>(&pool.swap_balance_a),
@@ -316,7 +381,7 @@ module srm_dex_v1::srmV1 {
         balance::value<A>(&pool.dev_balance_a),
         balance::value<A>(&pool.reward_balance_a),
 
-        pool.dev_wallet
+        pool.creator_royalty_wallet
         )
     }
 
@@ -410,7 +475,8 @@ module srm_dex_v1::srmV1 {
             id: object::new(ctx),
             swap_fee: 100,
             swap_fee_wallet: deployer,
-            admin: deployer
+            admin: deployer,
+            rewards_manager: deployer
         };
 
         transfer::share_object(config);
@@ -422,9 +488,9 @@ module srm_dex_v1::srmV1 {
         init_b: Balance<B>,
         lp_builder_fee: u64,
         burn_fee: u64,
-        dev_royalty_fee: u64,
+        creator_royalty_fee: u64,
         rewards_fee: u64,
-        dev_wallet: address,
+        creator_royalty_wallet: address,
         ctx: &mut TxContext
     ): Balance<LP<A, B>> {
         assert!(balance::value(&init_a) > 0 && balance::value(&init_b) > 0, EZeroInput);
@@ -432,7 +498,7 @@ module srm_dex_v1::srmV1 {
         // Ensure fees do not exceed maximum values
         assert!(lp_builder_fee <= MAX_LP_BUILDER_FEE, EInvalidFee);
         assert!(burn_fee <= MAX_BURN_FEE, EInvalidFee);
-        assert!(dev_royalty_fee <= MAX_DEV_ROYALTY_FEE, EInvalidFee);
+        assert!(creator_royalty_fee <= MAX_CREATOR_ROYALTY_FEE, EInvalidFee);
         assert!(rewards_fee <= MAX_REWARDS_FEE, EInvalidFee);
 
     // Create pool
@@ -445,7 +511,7 @@ module srm_dex_v1::srmV1 {
         // User-specified fees
         lp_builder_fee,
         burn_fee,
-        dev_royalty_fee,
+        creator_royalty_fee,
         rewards_fee,
 
         // Initialize fee balances
@@ -457,7 +523,7 @@ module srm_dex_v1::srmV1 {
         locked_lp_balance: balance::zero(),
 
         // User-specified dev wallet
-        dev_wallet
+        creator_royalty_wallet
     };
 
         let pool_id = object::id(&pool);
@@ -481,11 +547,11 @@ module srm_dex_v1::srmV1 {
         // Include fee settings in the event
         lp_builder_fee,
         burn_fee,
-        dev_royalty_fee,
+        creator_royalty_fee,
         rewards_fee,
 
         // Include developer wallet address
-        dev_wallet,
+        creator_royalty_wallet,
     });
 
         // Share the pool object
@@ -500,9 +566,9 @@ module srm_dex_v1::srmV1 {
         init_b: Balance<B>,
         lp_builder_fee: u64,
         burn_fee: u64,
-        dev_royalty_fee: u64,
+        creator_royalty_fee: u64,
         rewards_fee: u64,
-        dev_wallet: address,
+        creator_royalty_wallet: address,
         ctx: &mut TxContext
     ) {
         assert!(balance::value(&init_a) > 0 && balance::value(&init_b) > 0, EZeroInput);
@@ -510,7 +576,7 @@ module srm_dex_v1::srmV1 {
         // Ensure fees do not exceed maximum values
         assert!(lp_builder_fee <= MAX_LP_BUILDER_FEE, EInvalidFee);
         assert!(burn_fee <= MAX_BURN_FEE, EInvalidFee);
-        assert!(dev_royalty_fee <= MAX_DEV_ROYALTY_FEE, EInvalidFee);
+        assert!(creator_royalty_fee <= MAX_CREATOR_ROYALTY_FEE, EInvalidFee);
         assert!(rewards_fee <= MAX_REWARDS_FEE, EInvalidFee);
 
     // Create pool
@@ -523,7 +589,7 @@ module srm_dex_v1::srmV1 {
         // User-specified fees
         lp_builder_fee,
         burn_fee,
-        dev_royalty_fee,
+        creator_royalty_fee,
         rewards_fee,
 
         // Initialize fee balances
@@ -535,7 +601,7 @@ module srm_dex_v1::srmV1 {
         locked_lp_balance: balance::zero(),
 
         // User-specified dev wallet
-        dev_wallet
+        creator_royalty_wallet
     };
 
         let pool_id = object::id(&pool);
@@ -561,11 +627,11 @@ module srm_dex_v1::srmV1 {
         // Include fee settings in the event
         lp_builder_fee,
         burn_fee,
-        dev_royalty_fee,
+        creator_royalty_fee,
         rewards_fee,
 
         // Include developer wallet address
-        dev_wallet,
+        creator_royalty_wallet,
 
     });
 
@@ -704,7 +770,7 @@ module srm_dex_v1::srmV1 {
 
         // Retrieve fees from pool and config
         let swap_fee = config.swap_fee;
-        let (lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee) = get_pool_fees(pool);
+        let (lp_builder_fee, burn_fee, creator_royalty_fee, rewards_fee) = get_pool_fees(pool);
 
         // Calculate swap result
         let (
@@ -717,7 +783,7 @@ module srm_dex_v1::srmV1 {
             reward_fee_amount
         ) = calc_swap_out_b(
             input_amount, pool_a_amount, pool_b_amount, 
-            swap_fee, lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee
+            swap_fee, lp_builder_fee, burn_fee, creator_royalty_fee, rewards_fee
         );
 
         assert!(final_out_b >= min_out, EExcessiveSlippage);
@@ -743,7 +809,7 @@ module srm_dex_v1::srmV1 {
         };
 
         // **Distribute accumulated fees after processing the swap**
-        distribute_dev_royalty_fee(pool, clock, ctx);
+        distribute_creator_royalty_fee(pool, clock, ctx);
         distribute_burn_fee(pool, clock, config, ctx);
         distribute_swap_fee(pool, config, ctx);
 
@@ -782,7 +848,7 @@ module srm_dex_v1::srmV1 {
 
         // Retrieve fees from pool and config
         let swap_fee = config.swap_fee;
-        let (lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee) = get_pool_fees(pool);
+        let (lp_builder_fee, burn_fee, creator_royalty_fee, rewards_fee) = get_pool_fees(pool);
 
         // Calculate swap result
         let (
@@ -795,7 +861,7 @@ module srm_dex_v1::srmV1 {
             reward_fee_amount
         ) = calc_swap_out_a(
             input_amount, pool_b_amount, pool_a_amount, 
-            swap_fee, lp_builder_fee, burn_fee, dev_royalty_fee, rewards_fee
+            swap_fee, lp_builder_fee, burn_fee, creator_royalty_fee, rewards_fee
         );
 
         assert!(final_out_a >= min_out, EExcessiveSlippage);
@@ -820,7 +886,7 @@ module srm_dex_v1::srmV1 {
         };
 
         // **Distribute accumulated fees after processing the swap**
-        distribute_dev_royalty_fee(pool, clock, ctx);
+        distribute_creator_royalty_fee(pool, clock, ctx);
         distribute_burn_fee(pool, clock, config, ctx);
         distribute_swap_fee(pool, config, ctx);
 
@@ -847,7 +913,7 @@ module srm_dex_v1::srmV1 {
         swap_fee: u64, 
         lp_builder_fee: u64,
         burn_fee: u64,
-        dev_royalty_fee: u64,
+        creator_royalty_fee: u64,
         rewards_fee: u64
     ): (u64, u64, u64, u64, u64, u64, u64) { 
         assert!(pool_balance_b > 0 && pool_balance_a > 0, ENoLiquidity); // Prevent division by zero
@@ -875,8 +941,8 @@ module srm_dex_v1::srmV1 {
             ceil_muldiv(amount_out_a, burn_fee, BASIS_POINTS)
         } else { 0 };
 
-        let dev_fee_amount = if (dev_royalty_fee > 0) {
-            ceil_muldiv(amount_out_a, dev_royalty_fee, BASIS_POINTS)
+        let dev_fee_amount = if (creator_royalty_fee > 0) {
+            ceil_muldiv(amount_out_a, creator_royalty_fee, BASIS_POINTS)
         } else { 0 };
 
         let reward_fee_amount = if (rewards_fee > 0) {
@@ -896,14 +962,6 @@ module srm_dex_v1::srmV1 {
             - reward_fee_amount 
             - lp_builder_fee_amount_out;
 
-        // Returns:
-        // 1. Final amount of token A received by user
-        // 2. LP builder fee taken from token B
-        // 3. LP builder fee taken from token A
-        // 4. Swap fee taken from token A
-        // 5. Burn fee taken from token A
-        // 6. Developer fee taken from token A
-        // 7. Rewards fee taken from token A
         (final_amount_out_a, lp_builder_fee_amount_in, lp_builder_fee_amount_out, swap_fee_amount, burn_fee_amount, dev_fee_amount, reward_fee_amount)
     }
 
@@ -914,7 +972,7 @@ module srm_dex_v1::srmV1 {
         swap_fee: u64, 
         lp_builder_fee: u64,
         burn_fee: u64,
-        dev_royalty_fee: u64,
+        creator_royalty_fee: u64,
         rewards_fee: u64
     ): (u64, u64, u64, u64, u64, u64, u64) { // Now returns 7 values instead of 8
         assert!(pool_balance_a > 0 && pool_balance_b > 0, ENoLiquidity); // Prevent division by zero
@@ -928,8 +986,8 @@ module srm_dex_v1::srmV1 {
             ceil_muldiv(input_amount_a, burn_fee, BASIS_POINTS)
         } else { 0 };
 
-        let dev_fee_amount = if (dev_royalty_fee > 0) {
-            ceil_muldiv(input_amount_a, dev_royalty_fee, BASIS_POINTS)
+        let dev_fee_amount = if (creator_royalty_fee > 0) {
+            ceil_muldiv(input_amount_a, creator_royalty_fee, BASIS_POINTS)
         } else { 0 };
 
         let reward_fee_amount = if (rewards_fee > 0) {
@@ -1019,9 +1077,9 @@ module srm_dex_v1::srmV1 {
         amount_b: u64,
         lp_builder_fee: u64,
         burn_fee: u64,
-        dev_royalty_fee: u64,
+        creator_royalty_fee: u64,
         rewards_fee: u64,
-        dev_wallet: address,
+        creator_royalty_wallet: address,
         ctx: &mut TxContext
     ): (Coin<A>, Coin<B>, Coin<LP<A, B>>) { 
         // Split coins into specified amounts
@@ -1034,9 +1092,9 @@ module srm_dex_v1::srmV1 {
         coin::into_balance(used_b), 
             lp_builder_fee,
             burn_fee,
-            dev_royalty_fee,
+            creator_royalty_fee,
             rewards_fee,
-            dev_wallet,
+            creator_royalty_wallet,
             ctx
         );
 
@@ -1052,9 +1110,9 @@ module srm_dex_v1::srmV1 {
     amount_b: u64,
     lp_builder_fee: u64,
     burn_fee: u64,
-    dev_royalty_fee: u64,
+    creator_royalty_fee: u64,
     rewards_fee: u64,
-    dev_wallet: address,
+    creator_royalty_wallet: address,
     ctx: &mut TxContext
 ) {
     // ✅ Ensure deposit amounts are greater than zero
@@ -1073,9 +1131,9 @@ module srm_dex_v1::srmV1 {
         coin::into_balance(used_b), 
         lp_builder_fee,
         burn_fee,
-        dev_royalty_fee,
+        creator_royalty_fee,
         rewards_fee,
-        dev_wallet,
+        creator_royalty_wallet,
         ctx
     );
 
@@ -1092,9 +1150,9 @@ module srm_dex_v1::srmV1 {
     amount_b: u64,
     lp_builder_fee: u64,
     burn_fee: u64,
-    dev_royalty_fee: u64,
+    creator_royalty_fee: u64,
     rewards_fee: u64,
-    dev_wallet: address,
+    creator_royalty_wallet: address,
     ctx: &mut TxContext
 ) {
     // ✅ Ensure deposit amounts are greater than zero
@@ -1113,9 +1171,9 @@ module srm_dex_v1::srmV1 {
         coin::into_balance(used_b),
         lp_builder_fee,
         burn_fee,
-        dev_royalty_fee,
+        creator_royalty_fee,
         rewards_fee,
-        dev_wallet,
+        creator_royalty_wallet,
         ctx
     );
 
