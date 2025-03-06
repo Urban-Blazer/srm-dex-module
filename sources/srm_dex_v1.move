@@ -29,6 +29,8 @@ module srm_dex_v1::srmV1 {
     const EInvalidDepositAmount: u64 = 7;
     // Not Enough Rewards to Distrbute
     const ENotEnoughRewards: u64 = 8;
+    // NSF
+    const EInsufficientFunds: u64 = 9;
 
     /* === constants === */
 
@@ -240,21 +242,31 @@ module srm_dex_v1::srmV1 {
     public entry fun return_rewards_to_pool<A, B>(
         pool: &mut Pool<A, B>, 
         config: &Config, 
-        rewards_coin: Coin<A>,
+        mut rewards_coin: Coin<A>, // Mutable, since we will split it
+        amount: u64, 
         ctx: &mut TxContext
     ) {
-        let caller = sender(ctx);
-        assert!(caller == config.rewards_manager, EUnauthorized); // Only rewards_manager can call
+        let sender = sender(ctx);
+        assert!(sender == config.rewards_manager, EUnauthorized); // Only rewards_manager can call
 
-        // ✅ Convert Coin into Balance and return to reward_balance_a
-        let rewards_balance = coin::into_balance(rewards_coin);
+        // ✅ Ensure the coin has enough balance
+        assert!(coin::value(&rewards_coin) >= amount, EInsufficientFunds);
+
+        // ✅ Split the requested amount
+        let deposit_coin = coin::split(&mut rewards_coin, amount, ctx);
+
+        // ✅ Convert the deposit into a Balance and add to the pool
+        let rewards_balance = coin::into_balance(deposit_coin);
         balance::join(&mut pool.reward_balance_a, rewards_balance);
 
         // ✅ Emit event for tracking returns
         event::emit(RewardsReturned {
             pool_id: object::id(pool),
-            amount: balance::value(&pool.reward_balance_a)
+            amount: balance::value(&pool.reward_balance_a),
         });
+
+        // ✅ Return any remaining balance back to the sender
+        destroy_zero_or_transfer_balance(coin::into_balance(rewards_coin), sender, ctx);
     }
 
     /// Distributes accumulated dev royalty fees to the developer wallet.
