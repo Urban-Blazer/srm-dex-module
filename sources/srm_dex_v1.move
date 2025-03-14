@@ -128,6 +128,12 @@ module srm_dex_v1::srmV1 {
         lp_burnt: u64,
     }
 
+    /// Event emitted when a user deposits LP tokens into the pool.
+    public struct LPLocked has copy, drop, store {
+        pool_id: ID,
+        amount: u64,
+    }
+
     public struct Swapped has copy, drop {
         pool_id: ID,
         wallet: address,
@@ -158,7 +164,7 @@ module srm_dex_v1::srmV1 {
         amount: u64
     }
 
-    public struct RewardsReturned has copy, drop {
+    public struct RewardsDeposited has copy, drop {
         pool_id: ID,
         amount: u64
     }
@@ -237,7 +243,7 @@ module srm_dex_v1::srmV1 {
         });
     }
 
-    public entry fun return_rewards_to_pool<A, B>(
+    public entry fun deposit_rewards_to_pool<A, B>(
         pool: &mut Pool<A, B>, 
         config: &Config, 
         mut rewards_coin: Coin<A>,
@@ -245,7 +251,7 @@ module srm_dex_v1::srmV1 {
         ctx: &mut TxContext
     ) {
         let sender = sender(ctx);
-        assert!(sender == config.rewards_manager, EUnauthorized); // Only rewards_manager can call
+        assert!(sender == config.rewards_manager || sender == config.admin, EUnauthorized); // Allow both admin and rewards_manager
         assert!(coin::value(&rewards_coin) >= amount, EInsufficientFunds);
 
         let deposit_coin = coin::split(&mut rewards_coin, amount, ctx);
@@ -253,7 +259,7 @@ module srm_dex_v1::srmV1 {
         let rewards_balance = coin::into_balance(deposit_coin);
         balance::join(&mut pool.reward_balance_a, rewards_balance);
 
-        event::emit(RewardsReturned {
+        event::emit(RewardsDeposited {
             pool_id: object::id(pool),
             amount: balance::value(&pool.reward_balance_a),
         });
@@ -278,6 +284,21 @@ module srm_dex_v1::srmV1 {
                 timestamp: get_timestamp(clock)
             });
         }
+    }
+
+    /// Allows the creator royalty wallet to withdraw all accumulated creator royalties.
+    public entry fun withdraw_creator_royalty_fees<A, B>(
+        pool: &mut Pool<A, B>, 
+        ctx: &mut TxContext
+    ) {
+        let sender = sender(ctx);
+        assert!(sender == pool.creator_royalty_wallet, EUnauthorized); // Only the creator royalty wallet can withdraw
+        assert!(balance::value(&pool.creator_balance_a) > 0, EInsufficientFunds); // Ensure there are funds to withdraw
+
+        let full_amount = balance::value(&pool.creator_balance_a);
+        let withdrawn_balance = balance::split(&mut pool.creator_balance_a, full_amount);
+
+        destroy_zero_or_transfer_balance(withdrawn_balance, sender, ctx);
     }
     
     #[allow(unused_variable)]
@@ -326,6 +347,24 @@ module srm_dex_v1::srmV1 {
         
         transfer::public_transfer(coin::from_balance<A>(swap_funds, ctx), swap_fee_wallet);
         }
+    }
+
+    /// Allows the admin to withdraw all swap fees from the pool.
+    public entry fun withdraw_swap_fees<A, B>(
+        pool: &mut Pool<A, B>, 
+        config: &Config, 
+        ctx: &mut TxContext
+    ) {
+        let sender = sender(ctx);
+        assert!(sender == config.admin, EUnauthorized); // Only admin can withdraw fees
+        assert!(balance::value(&pool.swap_balance_a) > 0, EInsufficientFunds); // Ensure there are funds to withdraw
+
+        let full_amount = balance::value(&pool.swap_balance_a);
+        let withdrawn_balance = balance::split(&mut pool.swap_balance_a, full_amount);
+
+        let swap_fee_wallet = config.swap_fee_wallet;
+
+        destroy_zero_or_transfer_balance(withdrawn_balance, swap_fee_wallet, ctx);
     }
 
     /* === LP witness === */
@@ -1251,6 +1290,31 @@ module srm_dex_v1::srmV1 {
         let b_out = swap_a_for_b(pool, config, coin::into_balance(used_a), min_out, clock, ctx);
 
         (input, coin::from_balance(b_out, ctx))
+    }
+
+    /// Allows users to deposit a specific amount of LP tokens into the pool's locked LP balance.
+    public entry fun deposit_lp_tokens<A, B>(
+        pool: &mut Pool<A, B>,
+        mut lp_tokens: Coin<LP<A, B>>, // User's LP coin object
+        amount: u64, // Amount to deposit
+        ctx: &mut TxContext
+    ) {
+        assert!(amount > 0, EZeroInput); // Ensure deposit amount is greater than zero
+        assert!(coin::value(&lp_tokens) >= amount, EInsufficientFunds); // Ensure sufficient LP balance
+
+        let deposit_coin = coin::split(&mut lp_tokens, amount, ctx); // Split the deposit amount
+        let deposit_balance = coin::into_balance(deposit_coin); // Convert to balance
+
+        balance::join(&mut pool.locked_lp_balance, deposit_balance); // Deposit into locked balance
+
+        event::emit(LPLocked {
+            pool_id: object::id(pool),
+            amount, // Emit only the deposited amount
+        });
+
+        // Return the remaining LP tokens to the user
+        let sender = sender(ctx);
+        destroy_zero_or_transfer_balance(coin::into_balance(lp_tokens), sender, ctx);
     }
 
     public entry fun swap_a_for_b_with_coins_and_transfer_to_sender<A, B>(
