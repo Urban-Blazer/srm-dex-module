@@ -1,13 +1,13 @@
 module srm_dex_v1::srmV1 {
-    use std::type_name::{Self, TypeName};
     use sui::balance::{Self, Balance, Supply};
     use sui::coin::{Self, Coin};
     use sui::event;
     use sui::math;
-    use std::ascii;
     use sui::table::{Self, Table};
     use sui::tx_context::sender;
     use sui::clock::Clock;
+    use std::type_name::{Self, TypeName};
+    use std::ascii;
 
     /* === errors === */
 
@@ -31,6 +31,10 @@ module srm_dex_v1::srmV1 {
     const ENotEnoughRewards: u64 = 8;
     // NSF
     const EInsufficientFunds: u64 = 9;
+    // Address already on allow list
+    const EAddressAlreadyExists: u64 = 10;
+    // Address not on allow list
+    const EAddressNotFound: u64 = 11;
 
     /* === constants === */
 
@@ -180,6 +184,13 @@ module srm_dex_v1::srmV1 {
         rewards_manager: address
     }
 
+    /// A global object to manage the create pool lock and allowlist
+    public struct CreatePoolLock has key {
+        id: UID,
+        locked: bool, // If true, restricts pool creation
+        allowlist: vector<address>, // List of approved addresses
+    }
+
     public fun get_swap_fee(config: &Config): u64 {
         config.swap_fee
     }
@@ -216,6 +227,53 @@ module srm_dex_v1::srmV1 {
         let caller = sender(ctx);
         assert!(caller == config.admin, EUnauthorized); // Only admin can update
         config.rewards_manager = new_manager;
+    }
+
+    /// Toggles the create pool lock (only callable by admin)
+    public entry fun set_create_pool_lock(
+        lock: &mut CreatePoolLock, 
+        config: &Config, // Require config to verify admin
+        status: bool, 
+        ctx: &mut TxContext
+    ) {
+        let caller = sender(ctx);
+        assert!(caller == config.admin, EUnauthorized); // Only admin can update the lock
+
+        lock.locked = status;
+    }
+    
+    /// Adds an address to the allowlist (only callable by admin)
+    public entry fun add_to_allowlist(
+        lock: &mut CreatePoolLock, 
+        config: &Config, 
+        address: address, 
+        ctx: &mut TxContext
+    ) {
+        let caller = sender(ctx);
+        assert!(caller == config.admin, EUnauthorized); // Only admin can update allowlist
+
+        if (!vector::contains(&lock.allowlist, &address)) { 
+            vector::push_back(&mut lock.allowlist, address);
+        } else {
+            abort EAddressAlreadyExists
+        }
+    }
+
+    /// Removes an address from the allowlist (only callable by admin)
+    public entry fun remove_from_allowlist(
+        lock: &mut CreatePoolLock, 
+        config: &Config, 
+        address: address, 
+        ctx: &mut TxContext
+    ) {
+        let caller = sender(ctx);
+        assert!(caller == config.admin, EUnauthorized); // Only admin can update allowlist
+
+        let (found, index): (bool, u64) = vector::index_of(&lock.allowlist, &address);
+        assert!(found, EAddressNotFound); // Ensure address exists
+
+        vector::swap_remove(&mut lock.allowlist, index);
+
     }
     
     /* === Rewards Distribution === */
@@ -523,6 +581,15 @@ module srm_dex_v1::srmV1 {
         };
 
         transfer::share_object(config);
+
+        // Initialize the create pool lock with deployer in the allowlist
+        let create_pool_lock = CreatePoolLock {
+            id: object::new(ctx),
+            locked: true, // Default: locked
+            allowlist: vector::singleton(deployer), // Add deployer to allowlist
+        };
+        transfer::share_object(create_pool_lock);
+    
     }
 
     public fun create_pool<A, B>(
@@ -1129,6 +1196,7 @@ module srm_dex_v1::srmV1 {
     }
 
     public entry fun create_pool_and_lock_lp_in_pool<A, B>(
+        lock: &CreatePoolLock, // Global lock object
         factory: &mut Factory,
         mut init_a: Coin<A>,
         amount_a: u64,
@@ -1145,6 +1213,12 @@ module srm_dex_v1::srmV1 {
         assert!(amount_a > 0, EInvalidDepositAmount);
         assert!(amount_b > 0, EInvalidDepositAmount);
         let sender_addr = sender(ctx);
+
+        // ✅ Replace `if` with `assert!`
+        assert!(
+            !lock.locked || vector::contains(&lock.allowlist, &sender_addr),
+            EUnauthorized
+        );
 
         let used_a = coin::split(&mut init_a, amount_a, ctx);
         let used_b = coin::split(&mut init_b, amount_b, ctx);
@@ -1166,6 +1240,7 @@ module srm_dex_v1::srmV1 {
     }
 
     public entry fun create_pool_with_coins_and_transfer_lp_to_sender<A, B>(
+        lock: &CreatePoolLock, // Global lock object
         factory: &mut Factory,
         mut init_a: Coin<A>,
         amount_a: u64,
@@ -1182,6 +1257,12 @@ module srm_dex_v1::srmV1 {
         assert!(amount_a > 0, EInvalidDepositAmount);
         assert!(amount_b > 0, EInvalidDepositAmount);
         let sender_addr = sender(ctx);
+
+        // ✅ Replace `if` with `assert!`
+        assert!(
+            !lock.locked || vector::contains(&lock.allowlist, &sender_addr),
+            EUnauthorized
+        );
 
         let used_a = coin::split(&mut init_a, amount_a, ctx);
         let used_b = coin::split(&mut init_b, amount_b, ctx);
