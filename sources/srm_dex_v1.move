@@ -50,9 +50,9 @@ module srm_dex_v1::srmV1 {
 
     /* === Distribution Thresholds === */
 
-    const CREATOR_ROYALTY_FEE_THRESHOLD: u64 = 250_000_000; // 0.25 SUI in MIST
-    const BURN_THRESHOLD: u64 = 1_000_000_000; // 1 SUI in MIST
-    const SWAP_THRESHOLD: u64 = 250_000_000; // 0.25 SUI in MIST
+    const CREATOR_ROYALTY_FEE_THRESHOLD: u64 = 10_000_000_000; // 10 SUI/USDC Coins in MIST
+    const BURN_THRESHOLD: u64 = 10_000_000_000; // 10 SUI/USDC Coins in MIST
+    const SWAP_THRESHOLD: u64 = 1_000_000_000; // 1 SUI/USDC Coins in MIST
 
     /* === math === */
 
@@ -132,7 +132,6 @@ module srm_dex_v1::srmV1 {
         lp_burnt: u64,
     }
 
-    /// Event emitted when a user deposits LP tokens into the pool.
     public struct LPLocked has copy, drop, store {
         pool_id: ID,
         amount: u64,
@@ -175,7 +174,7 @@ module srm_dex_v1::srmV1 {
 
     /* === Admin === */
 
-    /// Config struct to store swap fee and admin addresses
+    /// Config to store swap fee and admin addresses
     public struct Config has key {
         id: UID,
         swap_fee: u64,
@@ -184,23 +183,15 @@ module srm_dex_v1::srmV1 {
         rewards_manager: address
     }
 
-    /// A global object to manage the create pool lock and allowlist
+    /// Config to manage the create pool lock and allowlist
     public struct CreatePoolLock has key {
         id: UID,
-        locked: bool, // If true, restricts pool creation
-        allowlist: vector<address>, // List of approved addresses
+        locked: bool,
+        allowlist: vector<address>,
     }
 
     public fun get_swap_fee(config: &Config): u64 {
         config.swap_fee
-    }
-
-    public fun get_swap_fee_wallet(config: &Config): address {
-        config.swap_fee_wallet
-    }
-
-    public fun get_admin(config: &Config): address {
-        config.admin
     }
 
     public entry fun update_swap_fee(config: &mut Config, new_fee: u64, ctx: &mut TxContext) {
@@ -229,20 +220,18 @@ module srm_dex_v1::srmV1 {
         config.rewards_manager = new_manager;
     }
 
-    /// Toggles the create pool lock (only callable by admin)
     public entry fun set_create_pool_lock(
         lock: &mut CreatePoolLock, 
-        config: &Config, // Require config to verify admin
+        config: &Config,
         status: bool, 
         ctx: &mut TxContext
     ) {
         let caller = sender(ctx);
-        assert!(caller == config.admin, EUnauthorized); // Only admin can update the lock
+        assert!(caller == config.admin, EUnauthorized); // Only admin can update
 
         lock.locked = status;
     }
     
-    /// Adds an address to the allowlist (only callable by admin)
     public entry fun add_to_allowlist(
         lock: &mut CreatePoolLock, 
         config: &Config, 
@@ -250,7 +239,7 @@ module srm_dex_v1::srmV1 {
         ctx: &mut TxContext
     ) {
         let caller = sender(ctx);
-        assert!(caller == config.admin, EUnauthorized); // Only admin can update allowlist
+        assert!(caller == config.admin, EUnauthorized); // Only admin can update
 
         if (!vector::contains(&lock.allowlist, &address)) { 
             vector::push_back(&mut lock.allowlist, address);
@@ -259,7 +248,6 @@ module srm_dex_v1::srmV1 {
         }
     }
 
-    /// Removes an address from the allowlist (only callable by admin)
     public entry fun remove_from_allowlist(
         lock: &mut CreatePoolLock, 
         config: &Config, 
@@ -267,10 +255,10 @@ module srm_dex_v1::srmV1 {
         ctx: &mut TxContext
     ) {
         let caller = sender(ctx);
-        assert!(caller == config.admin, EUnauthorized); // Only admin can update allowlist
+        assert!(caller == config.admin, EUnauthorized); // Only admin can update
 
         let (found, index): (bool, u64) = vector::index_of(&lock.allowlist, &address);
-        assert!(found, EAddressNotFound); // Ensure address exists
+        assert!(found, EAddressNotFound);
 
         vector::swap_remove(&mut lock.allowlist, index);
 
@@ -285,7 +273,7 @@ module srm_dex_v1::srmV1 {
         ctx: &mut TxContext
     ) {
         let caller = sender(ctx);
-        assert!(caller == config.rewards_manager, EUnauthorized);
+        assert!(caller == config.rewards_manager, EUnauthorized); // Only Rewards Manager can withdraw for distrbution
 
         let available_rewards = balance::value(&pool.reward_balance_a);
         assert!(amount > 0 && amount <= available_rewards, ENotEnoughRewards);
@@ -309,7 +297,7 @@ module srm_dex_v1::srmV1 {
         ctx: &mut TxContext
     ) {
         let sender = sender(ctx);
-        assert!(sender == config.rewards_manager || sender == config.admin, EUnauthorized); // Allow both admin and rewards_manager
+        assert!(sender == config.rewards_manager || sender == config.admin, EUnauthorized); // Only admin and rewards_manager can deposit rewards
         assert!(coin::value(&rewards_coin) >= amount, EInsufficientFunds);
 
         let deposit_coin = coin::split(&mut rewards_coin, amount, ctx);
@@ -327,18 +315,18 @@ module srm_dex_v1::srmV1 {
 
     /// Distributes accumulated pool creator royalty fees to the creator royalty wallet.
     public fun distribute_creator_royalty_fee<A, B>(pool: &mut Pool<A, B>, clock: &Clock, ctx: &mut TxContext) {
-        let dev_balance = balance::value(&pool.creator_balance_a);
+        let royalty_balance = balance::value(&pool.creator_balance_a);
 
-        if (dev_balance >= CREATOR_ROYALTY_FEE_THRESHOLD) {
+        if (royalty_balance >= CREATOR_ROYALTY_FEE_THRESHOLD) {
             let creator_royalty_wallet = pool.creator_royalty_wallet;
-            let dev_funds = balance::split(&mut pool.creator_balance_a, dev_balance);
+            let royalty_funds = balance::split(&mut pool.creator_balance_a, royalty_balance);
 
-            transfer::public_transfer(coin::from_balance(dev_funds, ctx), creator_royalty_wallet);
+            transfer::public_transfer(coin::from_balance(royalty_funds, ctx), creator_royalty_wallet);
 
             event::emit(CreatorRoyaltyFeeDistributed {
                 pool_id: object::id(pool),
                 creator_royalty_wallet: creator_royalty_wallet,
-                amount: dev_balance,
+                amount: royalty_balance,
                 timestamp: get_timestamp(clock)
             });
         }
@@ -586,7 +574,7 @@ module srm_dex_v1::srmV1 {
         let create_pool_lock = CreatePoolLock {
             id: object::new(ctx),
             locked: true, // Default: locked
-            allowlist: vector::singleton(deployer), // Add deployer to allowlist
+            allowlist: vector::singleton(deployer),
         };
         transfer::share_object(create_pool_lock);
     
@@ -632,7 +620,7 @@ module srm_dex_v1::srmV1 {
             reward_balance_a: balance::zero(),
             locked_lp_balance: balance::zero(),
 
-            // User-specified dev wallet
+            // User-specified royalty wallet
             creator_royalty_wallet
         };
 
@@ -889,7 +877,7 @@ module srm_dex_v1::srmV1 {
             lp_out_fee, 
             swap_fee_amount, 
             burn_fee_amount, 
-            dev_fee_amount, 
+            royalty_fee_amount, 
             reward_fee_amount
         ) = calc_swap_out_b(
             input_amount, pool_a_amount, pool_b_amount, 
@@ -910,8 +898,8 @@ module srm_dex_v1::srmV1 {
             balance::join(&mut pool.burn_balance_a, balance::split(&mut pool.balance_a, burn_fee_amount));
         };
 
-        if (dev_fee_amount != 0) {
-            balance::join(&mut pool.creator_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
+        if (royalty_fee_amount != 0) {
+            balance::join(&mut pool.creator_balance_a, balance::split(&mut pool.balance_a, royalty_fee_amount));
         };
     
         if (reward_fee_amount != 0) {
@@ -966,7 +954,7 @@ module srm_dex_v1::srmV1 {
             lp_out_fee, 
             swap_fee_amount, 
             burn_fee_amount, 
-            dev_fee_amount, 
+            royalty_fee_amount, 
             reward_fee_amount
         ) = calc_swap_out_a(
             input_amount, pool_b_amount, pool_a_amount, 
@@ -985,8 +973,8 @@ module srm_dex_v1::srmV1 {
             balance::join(&mut pool.burn_balance_a, balance::split(&mut pool.balance_a, burn_fee_amount));
         };
     
-        if (dev_fee_amount != 0) {
-            balance::join(&mut pool.creator_balance_a, balance::split(&mut pool.balance_a, dev_fee_amount));
+        if (royalty_fee_amount != 0) {
+            balance::join(&mut pool.creator_balance_a, balance::split(&mut pool.balance_a, royalty_fee_amount));
         };
     
         if (reward_fee_amount != 0) {
@@ -1047,7 +1035,7 @@ module srm_dex_v1::srmV1 {
             ceil_muldiv(amount_out_a, burn_fee, BASIS_POINTS)
         } else { 0 };
 
-        let dev_fee_amount = if (creator_royalty_fee > 0) {
+        let royalty_fee_amount = if (creator_royalty_fee > 0) {
             ceil_muldiv(amount_out_a, creator_royalty_fee, BASIS_POINTS)
         } else { 0 };
 
@@ -1064,11 +1052,11 @@ module srm_dex_v1::srmV1 {
         let final_amount_out_a = amount_out_a 
             - swap_fee_amount
             - burn_fee_amount 
-            - dev_fee_amount 
+            - royalty_fee_amount 
             - reward_fee_amount 
             - lp_builder_fee_amount_out;
 
-        (final_amount_out_a, lp_builder_fee_amount_in, lp_builder_fee_amount_out, swap_fee_amount, burn_fee_amount, dev_fee_amount, reward_fee_amount)
+        (final_amount_out_a, lp_builder_fee_amount_in, lp_builder_fee_amount_out, swap_fee_amount, burn_fee_amount, royalty_fee_amount, reward_fee_amount)
     }
 
     fun calc_swap_out_b(
@@ -1092,7 +1080,7 @@ module srm_dex_v1::srmV1 {
             ceil_muldiv(input_amount_a, burn_fee, BASIS_POINTS)
         } else { 0 };
 
-        let dev_fee_amount = if (creator_royalty_fee > 0) {
+        let royalty_fee_amount = if (creator_royalty_fee > 0) {
             ceil_muldiv(input_amount_a, creator_royalty_fee, BASIS_POINTS)
         } else { 0 };
 
@@ -1108,7 +1096,7 @@ module srm_dex_v1::srmV1 {
         let adjusted_amount_in_a = input_amount_a 
         - swap_fee_amount 
         - burn_fee_amount 
-        - dev_fee_amount 
+        - royalty_fee_amount 
         - reward_fee_amount 
         - lp_builder_fee_amount_in;
 
@@ -1124,7 +1112,7 @@ module srm_dex_v1::srmV1 {
 
         let final_amount_out_b = amount_out_b - lp_builder_fee_amount_out;
 
-        (final_amount_out_b, lp_builder_fee_amount_in, lp_builder_fee_amount_out, swap_fee_amount, burn_fee_amount, dev_fee_amount, reward_fee_amount)
+        (final_amount_out_b, lp_builder_fee_amount_in, lp_builder_fee_amount_out, swap_fee_amount, burn_fee_amount, royalty_fee_amount, reward_fee_amount)
     }
 
     fun calc_burn_swap_out_b(
@@ -1196,7 +1184,7 @@ module srm_dex_v1::srmV1 {
     }
 
     public entry fun create_pool_and_lock_lp_in_pool<A, B>(
-        lock: &CreatePoolLock, // Global lock object
+        lock: &CreatePoolLock,
         factory: &mut Factory,
         mut init_a: Coin<A>,
         amount_a: u64,
@@ -1214,7 +1202,6 @@ module srm_dex_v1::srmV1 {
         assert!(amount_b > 0, EInvalidDepositAmount);
         let sender_addr = sender(ctx);
 
-        // ✅ Replace `if` with `assert!`
         assert!(
             !lock.locked || vector::contains(&lock.allowlist, &sender_addr),
             EUnauthorized
@@ -1240,7 +1227,7 @@ module srm_dex_v1::srmV1 {
     }
 
     public entry fun create_pool_with_coins_and_transfer_lp_to_sender<A, B>(
-        lock: &CreatePoolLock, // Global lock object
+        lock: &CreatePoolLock,
         factory: &mut Factory,
         mut init_a: Coin<A>,
         amount_a: u64,
@@ -1258,7 +1245,6 @@ module srm_dex_v1::srmV1 {
         assert!(amount_b > 0, EInvalidDepositAmount);
         let sender_addr = sender(ctx);
 
-        // ✅ Replace `if` with `assert!`
         assert!(
             !lock.locked || vector::contains(&lock.allowlist, &sender_addr),
             EUnauthorized
@@ -1376,24 +1362,23 @@ module srm_dex_v1::srmV1 {
     /// Allows users to deposit a specific amount of LP tokens into the pool's locked LP balance.
     public entry fun deposit_lp_tokens<A, B>(
         pool: &mut Pool<A, B>,
-        mut lp_tokens: Coin<LP<A, B>>, // User's LP coin object
-        amount: u64, // Amount to deposit
+        mut lp_tokens: Coin<LP<A, B>>,
+        amount: u64,
         ctx: &mut TxContext
     ) {
-        assert!(amount > 0, EZeroInput); // Ensure deposit amount is greater than zero
-        assert!(coin::value(&lp_tokens) >= amount, EInsufficientFunds); // Ensure sufficient LP balance
+        assert!(amount > 0, EZeroInput);
+        assert!(coin::value(&lp_tokens) >= amount, EInsufficientFunds);
 
-        let deposit_coin = coin::split(&mut lp_tokens, amount, ctx); // Split the deposit amount
-        let deposit_balance = coin::into_balance(deposit_coin); // Convert to balance
+        let deposit_coin = coin::split(&mut lp_tokens, amount, ctx);
+        let deposit_balance = coin::into_balance(deposit_coin);
 
-        balance::join(&mut pool.locked_lp_balance, deposit_balance); // Deposit into locked balance
+        balance::join(&mut pool.locked_lp_balance, deposit_balance);
 
         event::emit(LPLocked {
             pool_id: object::id(pool),
-            amount, // Emit only the deposited amount
+            amount,
         });
 
-        // Return the remaining LP tokens to the user
         let sender = sender(ctx);
         destroy_zero_or_transfer_balance(coin::into_balance(lp_tokens), sender, ctx);
     }
