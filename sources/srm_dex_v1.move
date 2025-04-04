@@ -50,9 +50,9 @@ module srm_dex_v1::srmV1 {
 
     /* === Distribution Thresholds === */
 
-    const CREATOR_ROYALTY_FEE_THRESHOLD: u64 = 10_000_000_000; // 10 SUI/USDC Coins in MIST
-    const BURN_THRESHOLD: u64 = 10_000_000_000; // 10 SUI/USDC Coins in MIST
-    const SWAP_THRESHOLD: u64 = 1_000_000_000; // 1 SUI/USDC Coins in MIST
+    const CREATOR_ROYALTY_FEE_THRESHOLD: u64 = 100_000_000; // 0.1 SUI / 100 USDC Coins in MIST
+    const BURN_THRESHOLD: u64 = 100_000_000; // 0.1 SUI / 100 USDC Coins in MIST
+    const SWAP_THRESHOLD: u64 = 100_000_000; // 0.1 SUI / 100 USDC Coins in MIST
 
     /* === math === */
 
