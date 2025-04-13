@@ -7,7 +7,6 @@ module srm_dex_v1::srmV1 {
     use sui::tx_context::sender;
     use sui::clock::Clock;
     use std::type_name::{Self, TypeName};
-    use std::ascii;
 
     /* === errors === */
 
@@ -35,6 +34,8 @@ module srm_dex_v1::srmV1 {
     const EAddressAlreadyExists: u64 = 10;
     // Address not on allow list
     const EAddressNotFound: u64 = 11;
+    // No zero address
+    const EInvalidAddress: u64 = 12;
 
     /* === constants === */
 
@@ -156,8 +157,14 @@ module srm_dex_v1::srmV1 {
 
     public struct BuyBackandBurn has copy, drop {
         pool_id: ID,
-        amount_a_burnt: u64,
-        amount_b_received: u64,
+        amount_a_buy: u64,
+        amount_b_burnt: u64,
+        timestamp: u64
+    }
+
+    public struct BurnCoins has copy, drop {
+        pool_id: ID,
+        amount_b_burnt: u64,
         timestamp: u64
     }
 
@@ -262,6 +269,20 @@ module srm_dex_v1::srmV1 {
 
         vector::swap_remove(&mut lock.allowlist, index);
 
+    }
+
+    /// Allows the admin to update the creator royalty wallet for a specific pool.
+    public entry fun update_creator_royalty_wallet<A, B>(
+        pool: &mut Pool<A, B>,
+        config: &Config,
+        new_wallet: address,
+        ctx: &mut TxContext
+    ) {
+        let caller = sender(ctx);
+        assert!(caller == config.admin, EUnauthorized); // Only admin can update
+        assert!(new_wallet != @0x0, EInvalidAddress);
+
+        pool.creator_royalty_wallet = new_wallet;
     }
     
     /* === Rewards Distribution === */
@@ -376,8 +397,8 @@ module srm_dex_v1::srmV1 {
 
             event::emit(BuyBackandBurn {
                 pool_id: object::id(pool),
-                amount_a_burnt: burn_balance_a,
-                amount_b_received: amount_out_b,
+                amount_a_buy: burn_balance_a,
+                amount_b_burnt: amount_out_b,
                 timestamp: get_timestamp(clock) 
             });
         }
@@ -474,15 +495,22 @@ module srm_dex_v1::srmV1 {
         )
     }
 
-    public fun get_pool_id<A, B>(factory: &Factory): ID {
+    fun find_pool_key<A, B>(factory: &Factory): PoolItem {
         let a = type_name::get<A>();
         let b = type_name::get<B>();
-        assert!(cmp_type_names(&a, &b) == 0, EInvalidPair);
+        assert!(a != b, EInvalidPair);
 
-        let item = PoolItem { a, b };
-        assert!(table::contains(&factory.pools, item), ENoLiquidity);
+        let key1 = PoolItem { a, b };
+        if (table::contains(&factory.pools, key1)) return key1;
 
-        *(table::borrow(&factory.pools, item))
+        let key2 = PoolItem { a: b, b: a };
+        assert!(table::contains(&factory.pools, key2), ENoLiquidity);
+        key2
+    }
+
+    public fun get_pool_id<A, B>(factory: &Factory): ID {
+        let key = find_pool_key<A, B>(factory);
+        *(table::borrow(&factory.pools, key))
     }
 
     public fun get_pool<A, B>(pool: &Pool<A, B>): &Pool<A, B> {
@@ -508,45 +536,19 @@ module srm_dex_v1::srmV1 {
     fun add_pool<A, B>(factory: &mut Factory, pool_id: ID) {
         let a = type_name::get<A>();
         let b = type_name::get<B>();
-        assert!(cmp_type_names(&a, &b) == 0, EInvalidPair);
+        assert!(a != b, EInvalidPair);
 
+        let key1 = PoolItem { a, b };
+        let key2 = PoolItem { a: b, b: a };
+
+        assert!(
+            !(table::contains(&factory.pools, key1) || table::contains(&factory.pools, key2)),
+            EPoolAlreadyExists
+        );
+
+        // ✅ Use the user-defined order (not key1 or key2)
         let item = PoolItem { a, b };
-        assert!(table::contains(&factory.pools, item) == false, EPoolAlreadyExists);
-
         table::add(&mut factory.pools, item, pool_id);
-    }
-
-    #[allow(deprecated_usage)]
-    // returns: 0 if a < b; 1 if a == b; 2 if a > b
-    public fun cmp_type_names(a: &TypeName, b: &TypeName): u8 {
-        let bytes_a = ascii::as_bytes(type_name::borrow_string(a));
-        let bytes_b = ascii::as_bytes(type_name::borrow_string(b));
-
-        let len_a = vector::length(bytes_a);
-        let len_b = vector::length(bytes_b);
-
-        let mut i = 0;
-        let n = math::min(len_a, len_b);
-        while (i < n) {
-            let a = *vector::borrow(bytes_a, i);
-            let b = *vector::borrow(bytes_b, i);
-
-            if (a < b) {
-                return 0
-            };
-            if (a > b) {
-                return 2
-            };
-            i = i + 1;
-        };
-
-        if (len_a == len_b) {
-            1
-        } else if (len_a < len_b) {
-            0
-        } else {
-            2
-        }
     }
 
     /* === main logic === */
@@ -598,6 +600,7 @@ module srm_dex_v1::srmV1 {
         assert!(burn_fee <= MAX_BURN_FEE, EInvalidFee);
         assert!(creator_royalty_fee <= MAX_CREATOR_ROYALTY_FEE, EInvalidFee);
         assert!(rewards_fee <= MAX_REWARDS_FEE, EInvalidFee);
+        assert!(creator_royalty_wallet != @0x0, EInvalidAddress);
 
         // Create pool
         let mut pool = Pool<A, B> {
@@ -676,6 +679,7 @@ module srm_dex_v1::srmV1 {
         assert!(burn_fee <= MAX_BURN_FEE, EInvalidFee);
         assert!(creator_royalty_fee <= MAX_CREATOR_ROYALTY_FEE, EInvalidFee);
         assert!(rewards_fee <= MAX_REWARDS_FEE, EInvalidFee);
+        assert!(creator_royalty_wallet != @0x0, EInvalidAddress);
 
         // Create pool
         let mut pool = Pool<A, B> {
@@ -1152,6 +1156,7 @@ module srm_dex_v1::srmV1 {
     }
 
     public fun create_pool_with_coins<A, B>(
+        lock: &CreatePoolLock,
         factory: &mut Factory,
         mut init_a: Coin<A>,
         amount_a: u64,
@@ -1164,7 +1169,12 @@ module srm_dex_v1::srmV1 {
         creator_royalty_wallet: address,
         ctx: &mut TxContext
     ): (Coin<A>, Coin<B>, Coin<LP<A, B>>) { 
-        
+        let sender_addr = sender(ctx);
+        assert!(
+            !lock.locked || vector::contains(&lock.allowlist, &sender_addr),
+            EUnauthorized
+        );
+
         let used_a = coin::split(&mut init_a, amount_a, ctx);
         let used_b = coin::split(&mut init_b, amount_b, ctx);
 
@@ -1357,6 +1367,32 @@ module srm_dex_v1::srmV1 {
         let b_out = swap_a_for_b(pool, config, coin::into_balance(used_a), min_out, clock, ctx);
 
         (input, coin::from_balance(b_out, ctx))
+    }
+
+    /// Allows users to deposit a specific amount of LP tokens into the pool's locked LP balance.
+    public entry fun deposit_coinB_tokens<A, B>(
+        pool: &mut Pool<A, B>,
+        mut coinB_tokens: Coin<B>,
+        amount: u64,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        assert!(amount > 0, EZeroInput);
+        assert!(coin::value(&coinB_tokens) >= amount, EInsufficientFunds);
+
+        let deposit_coin = coin::split(&mut coinB_tokens, amount, ctx);
+        let deposit_balance = coin::into_balance(deposit_coin);
+
+        balance::join(&mut pool.burn_balance_b, deposit_balance);
+
+        event::emit(BurnCoins {
+            pool_id: object::id(pool),
+            amount_b_burnt: amount,
+            timestamp: get_timestamp(clock)
+        });
+
+        let sender = sender(ctx);
+        destroy_zero_or_transfer_balance(coin::into_balance(coinB_tokens), sender, ctx);
     }
 
     /// Allows users to deposit a specific amount of LP tokens into the pool's locked LP balance.
