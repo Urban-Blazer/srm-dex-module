@@ -495,32 +495,6 @@ module srm_dex_v1::srmV1 {
         )
     }
 
-    fun find_pool_key<A, B>(factory: &Factory): PoolItem {
-        let a = type_name::get<A>();
-        let b = type_name::get<B>();
-        assert!(a != b, EInvalidPair);
-
-        let key1 = PoolItem { a, b };
-        if (table::contains(&factory.pools, key1)) return key1;
-
-        let key2 = PoolItem { a: b, b: a };
-        assert!(table::contains(&factory.pools, key2), ENoLiquidity);
-        key2
-    }
-
-    public fun get_pool_id<A, B>(factory: &Factory): ID {
-        let key = find_pool_key<A, B>(factory);
-        *(table::borrow(&factory.pools, key))
-    }
-
-    public fun get_pool<A, B>(pool: &Pool<A, B>): &Pool<A, B> {
-        pool
-    }
-
-    public fun get_pool_balances<A, B>(pool: &Pool<A, B>): (u64, u64) {
-        (balance::value(&pool.balance_a), balance::value(&pool.balance_b))
-    }
-
     /* === Factory === */
 
     public struct Factory has key {
