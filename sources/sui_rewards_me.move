@@ -1,4 +1,4 @@
-module srm_dex_v1::srmV1 {
+module sui_rewards_me::SRMV1 {
     use sui::balance::{Self, Balance, Supply};
     use sui::coin::{Self, Coin};
     use sui::event;
@@ -113,6 +113,8 @@ module srm_dex_v1::srmV1 {
 
         // Pool Creator Royalty Wallet
         creator_royalty_wallet: address,
+
+        timestamp: u64,
     }
 
     public struct LiquidityAdded has copy, drop {
@@ -122,6 +124,8 @@ module srm_dex_v1::srmV1 {
         amountin_a: u64,
         amountin_b: u64,
         lp_minted: u64,
+        total_lp_supply: u64,
+        timestamp: u64,
     }
 
     public struct LiquidityRemoved has copy, drop {
@@ -131,6 +135,8 @@ module srm_dex_v1::srmV1 {
         amountout_a: u64,
         amountout_b: u64,
         lp_burnt: u64,
+        total_lp_supply: u64,
+        timestamp: u64,
     }
 
     public struct LPLocked has copy, drop, store {
@@ -145,6 +151,15 @@ module srm_dex_v1::srmV1 {
         amountin: u64,
         tokenout: TypeName,
         amountout: u64,
+        is_buy: bool,
+        reserve_a: u64,
+        reserve_b: u64,
+        swap_fee: u64,
+        burn_fee: u64,
+        royalty_fee: u64,
+        rewards_fee: u64,
+        lp_in_fee: u64,
+        lp_out_fee: u64,
         timestamp: u64
     }
 
@@ -177,6 +192,12 @@ module srm_dex_v1::srmV1 {
     public struct RewardsDeposited has copy, drop {
         pool_id: ID,
         amount: u64
+    }
+
+    public struct SwapFeeDistributed has copy, drop {
+        pool_id: ID,
+        amount: u64,
+        timestamp: u64
     }
 
     /* === Admin === */
@@ -405,7 +426,7 @@ module srm_dex_v1::srmV1 {
     }
 
     /// Sends swap fees collected to admin
-    public fun distribute_swap_fee<A, B>(pool: &mut Pool<A, B>, config: &Config, ctx: &mut TxContext) {
+    public fun distribute_swap_fee<A, B>(pool: &mut Pool<A, B>, config: &Config, clock: &Clock, ctx: &mut TxContext) {
         let swap_balance = balance::value(&pool.swap_balance_a);
 
         if (swap_balance >= SWAP_THRESHOLD) {
@@ -413,6 +434,14 @@ module srm_dex_v1::srmV1 {
             let swap_fee_wallet = config.swap_fee_wallet;
         
         transfer::public_transfer(coin::from_balance<A>(swap_funds, ctx), swap_fee_wallet);
+
+        let timestamp = get_timestamp(clock);
+
+        event::emit(SwapFeeDistributed {
+            pool_id: object::id(pool),
+            amount: swap_balance,
+            timestamp
+        });
         }
     }
 
@@ -565,6 +594,7 @@ module srm_dex_v1::srmV1 {
         creator_royalty_fee: u64,
         rewards_fee: u64,
         creator_royalty_wallet: address,
+        clock: &Clock,
         ctx: &mut TxContext
     ): Balance<LP<A, B>> {
         assert!(balance::value(&init_a) > 0 && balance::value(&init_b) > 0, EZeroInput);
@@ -627,6 +657,7 @@ module srm_dex_v1::srmV1 {
 
         // Include creator royalty wallet address
         creator_royalty_wallet,
+        timestamp: get_timestamp(clock)
     });
 
         // Share the pool object
@@ -644,6 +675,7 @@ module srm_dex_v1::srmV1 {
         creator_royalty_fee: u64,
         rewards_fee: u64,
         creator_royalty_wallet: address,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         assert!(balance::value(&init_a) > 0 && balance::value(&init_b) > 0, EZeroInput);
@@ -688,7 +720,13 @@ module srm_dex_v1::srmV1 {
         let lp_amount = mulsqrt(balance::value(&pool.balance_a), balance::value(&pool.balance_b));
         let lp_balance = balance::increase_supply(&mut pool.lp_supply, lp_amount);
 
+        let locked_lp_amount = balance::value(&lp_balance);
         balance::join(&mut pool.locked_lp_balance, lp_balance);
+
+        event::emit(LPLocked {
+        pool_id,
+        amount: locked_lp_amount,
+        });
 
         // Emit event
         event::emit(PoolCreated {
@@ -708,14 +746,14 @@ module srm_dex_v1::srmV1 {
 
         // Include creator royalty wallet address
         creator_royalty_wallet,
-
+        timestamp: get_timestamp(clock)
     });
 
         // Share the pool object
         transfer::share_object(pool);
     }
 
-    public fun add_liquidity<A, B>(pool: &mut Pool<A, B>, mut input_a: Balance<A>, mut input_b: Balance<B>, min_lp_out: u64): (Balance<A>, Balance<B>, Balance<LP<A, B>>) {
+    public fun add_liquidity<A, B>(pool: &mut Pool<A, B>, mut input_a: Balance<A>, mut input_b: Balance<B>, min_lp_out: u64, clock: &Clock): (Balance<A>, Balance<B>, Balance<LP<A, B>>) {
         assert!(balance::value(&input_a) > 0 && balance::value(&input_b) > 0, EZeroInput);
 
         // calculate the deposit amounts
@@ -781,6 +819,8 @@ module srm_dex_v1::srmV1 {
         assert!(lp_to_issue >= min_lp_out, EExcessiveSlippage);
         let lp = balance::increase_supply(&mut pool.lp_supply, lp_to_issue);
 
+        let total_lp_supply = balance::supply_value(&pool.lp_supply);
+
         event::emit(LiquidityAdded {
             pool_id: object::id(pool),
             a: type_name::get<A>(),
@@ -788,13 +828,15 @@ module srm_dex_v1::srmV1 {
             amountin_a: deposit_a,
             amountin_b: deposit_b,
             lp_minted: lp_to_issue,
+            total_lp_supply,
+            timestamp: get_timestamp(clock)
         });
 
         // return
         (input_a, input_b, lp)
     }
 
-    public fun remove_liquidity<A, B>(pool: &mut Pool<A, B>, lp_in: Balance<LP<A, B>>, min_a_out: u64, min_b_out: u64): (Balance<A>, Balance<B>) {
+    public fun remove_liquidity<A, B>(pool: &mut Pool<A, B>, lp_in: Balance<LP<A, B>>, min_a_out: u64, min_b_out: u64, clock: &Clock): (Balance<A>, Balance<B>) {
         assert!(balance::value(&lp_in) > 0, EZeroInput);
         assert!(balance::supply_value(&pool.lp_supply) > 0, ENoLiquidity);
 
@@ -812,6 +854,8 @@ module srm_dex_v1::srmV1 {
         // burn lp tokens
         balance::decrease_supply(&mut pool.lp_supply, lp_in);
 
+        let total_lp_supply = balance::supply_value(&pool.lp_supply);
+
         event::emit(LiquidityRemoved {
             pool_id: object::id(pool),
             a: type_name::get<A>(),
@@ -819,6 +863,8 @@ module srm_dex_v1::srmV1 {
             amountout_a: a_out,
             amountout_b: b_out,
             lp_burnt: lp_in_amount,
+            total_lp_supply,
+            timestamp: get_timestamp(clock)
         });
 
         // return amounts
@@ -886,8 +932,10 @@ module srm_dex_v1::srmV1 {
 
         distribute_creator_royalty_fee(pool, clock, ctx);
         distribute_burn_fee(pool, clock, config, ctx);
-        distribute_swap_fee(pool, config, ctx);
+        distribute_swap_fee(pool, config, clock, ctx);
 
+        let reserve_a = balance::value(&pool.balance_a);
+        let reserve_b = balance::value(&pool.balance_b) - final_out_b;
         let user_wallet = sender(ctx);
         let timestamp = get_timestamp(clock);
 
@@ -898,6 +946,15 @@ module srm_dex_v1::srmV1 {
             amountin: input_amount,
             tokenout: type_name::get<B>(),
             amountout: final_out_b,
+            is_buy: true,
+            reserve_a,
+            reserve_b,
+            swap_fee: swap_fee_amount,
+            burn_fee: burn_fee_amount,
+            royalty_fee: royalty_fee_amount,
+            rewards_fee: reward_fee_amount,
+            lp_in_fee,
+            lp_out_fee,
             timestamp: timestamp
         });
 
@@ -961,8 +1018,10 @@ module srm_dex_v1::srmV1 {
 
         distribute_creator_royalty_fee(pool, clock, ctx);
         distribute_burn_fee(pool, clock, config, ctx);
-        distribute_swap_fee(pool, config, ctx);
+        distribute_swap_fee(pool, config, clock, ctx);
 
+        let reserve_a = balance::value(&pool.balance_a) - final_out_a;
+        let reserve_b = balance::value(&pool.balance_b);
         let user_wallet = sender(ctx);        
         let timestamp = get_timestamp(clock); 
 
@@ -973,6 +1032,15 @@ module srm_dex_v1::srmV1 {
             amountin: input_amount,
             tokenout: type_name::get<A>(),
             amountout: final_out_a,
+            is_buy: false,
+            reserve_a,
+            reserve_b,
+            swap_fee: swap_fee_amount,
+            burn_fee: burn_fee_amount,
+            royalty_fee: royalty_fee_amount,
+            rewards_fee: reward_fee_amount,
+            lp_in_fee,
+            lp_out_fee,
             timestamp: timestamp
         });
 
@@ -1141,6 +1209,7 @@ module srm_dex_v1::srmV1 {
         creator_royalty_fee: u64,
         rewards_fee: u64,
         creator_royalty_wallet: address,
+        clock: &Clock,
         ctx: &mut TxContext
     ): (Coin<A>, Coin<B>, Coin<LP<A, B>>) { 
         let sender_addr = sender(ctx);
@@ -1161,6 +1230,7 @@ module srm_dex_v1::srmV1 {
             creator_royalty_fee,
             rewards_fee,
             creator_royalty_wallet,
+            clock,
             ctx
         );
 
@@ -1179,6 +1249,7 @@ module srm_dex_v1::srmV1 {
         creator_royalty_fee: u64,
         rewards_fee: u64,
         creator_royalty_wallet: address,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
     
@@ -1203,6 +1274,7 @@ module srm_dex_v1::srmV1 {
             creator_royalty_fee,
             rewards_fee,
             creator_royalty_wallet,
+            clock,
             ctx
         );
 
@@ -1222,6 +1294,7 @@ module srm_dex_v1::srmV1 {
         creator_royalty_fee: u64,
         rewards_fee: u64,
         creator_royalty_wallet: address,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
     
@@ -1246,6 +1319,7 @@ module srm_dex_v1::srmV1 {
             creator_royalty_fee,
             rewards_fee,
             creator_royalty_wallet,
+            clock,
             ctx
         );
 
@@ -1257,8 +1331,8 @@ module srm_dex_v1::srmV1 {
         destroy_zero_or_transfer_balance(lp_balance, sender_addr, ctx);
     }
 
-    public fun add_liquidity_with_coins<A, B>(pool: &mut Pool<A, B>, input_a: Coin<A>, input_b: Coin<B>, min_lp_out: u64, ctx: &mut TxContext): (Coin<A>, Coin<B>, Coin<LP<A, B>>) {
-        let (remaining_a, remaining_b, lp) = add_liquidity(pool, coin::into_balance(input_a), coin::into_balance(input_b), min_lp_out);
+    public fun add_liquidity_with_coins<A, B>(pool: &mut Pool<A, B>, input_a: Coin<A>, input_b: Coin<B>, min_lp_out: u64, clock: &Clock, ctx: &mut TxContext): (Coin<A>, Coin<B>, Coin<LP<A, B>>) {
+        let (remaining_a, remaining_b, lp) = add_liquidity(pool, coin::into_balance(input_a), coin::into_balance(input_b), min_lp_out, clock);
 
         (
             coin::from_balance(remaining_a, ctx),
@@ -1273,7 +1347,8 @@ module srm_dex_v1::srmV1 {
         a_amount: u64,  
         mut input_b: Coin<B>, 
         b_amount: u64,  
-        min_lp_out: u64, 
+        min_lp_out: u64,
+        clock: &Clock, 
         ctx: &mut TxContext
     ) {
         let sender = sender(ctx);
@@ -1284,7 +1359,7 @@ module srm_dex_v1::srmV1 {
         let deposit_a = coin::split(&mut input_a, a_amount, ctx);
         let deposit_b = coin::split(&mut input_b, b_amount, ctx);
 
-        let (remaining_a, remaining_b, lp) = add_liquidity(pool, coin::into_balance(deposit_a), coin::into_balance(deposit_b), min_lp_out);
+        let (remaining_a, remaining_b, lp) = add_liquidity(pool, coin::into_balance(deposit_a), coin::into_balance(deposit_b), min_lp_out, clock);
 
         destroy_zero_or_transfer_balance(lp, sender, ctx);
 
@@ -1297,8 +1372,8 @@ module srm_dex_v1::srmV1 {
         destroy_zero_or_transfer_balance(coin::into_balance(remaining_b_coin), sender, ctx);
     }
 
-    public fun remove_liquidity_with_coins<A, B>(pool: &mut Pool<A, B>, lp_in: Coin<LP<A, B>>, min_a_out: u64, min_b_out: u64, ctx: &mut TxContext): (Coin<A>, Coin<B>) {
-        let (a_out, b_out) = remove_liquidity(pool, coin::into_balance(lp_in), min_a_out, min_b_out);
+    public fun remove_liquidity_with_coins<A, B>(pool: &mut Pool<A, B>, lp_in: Coin<LP<A, B>>, min_a_out: u64, min_b_out: u64, clock: &Clock, ctx: &mut TxContext): (Coin<A>, Coin<B>) {
+        let (a_out, b_out) = remove_liquidity(pool, coin::into_balance(lp_in), min_a_out, min_b_out, clock);
 
         (
             coin::from_balance(a_out, ctx),
@@ -1311,7 +1386,8 @@ module srm_dex_v1::srmV1 {
         mut lp_in: Coin<LP<A, B>>,
         lp_amount: u64,
         min_a_out: u64, 
-        min_b_out: u64, 
+        min_b_out: u64,
+        clock: &Clock, 
         ctx: &mut TxContext
     ) {
         assert!(lp_amount > 0, EInvalidDepositAmount);
@@ -1319,7 +1395,7 @@ module srm_dex_v1::srmV1 {
 
         let lp_used = coin::split(&mut lp_in, lp_amount, ctx);
 
-        let (a_out, b_out) = remove_liquidity(pool, coin::into_balance(lp_used), min_a_out, min_b_out);
+        let (a_out, b_out) = remove_liquidity(pool, coin::into_balance(lp_used), min_a_out, min_b_out, clock);
 
         destroy_zero_or_transfer_balance(a_out, sender, ctx);
         destroy_zero_or_transfer_balance(b_out, sender, ctx);

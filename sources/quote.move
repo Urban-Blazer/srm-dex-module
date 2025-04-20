@@ -1,4 +1,4 @@
-module srm_dex_v1::quote {
+module sui_rewards_me::quote {
 
     /* === Constants === */
     const EZeroInput: u64 = 0;      // Input amount is zero
