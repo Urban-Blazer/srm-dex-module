@@ -14,7 +14,7 @@ A simple Sui Move version AMM Dex based on the logic of srmV1.
 
 2. Pool
 + A `Pool<A, B>` is a global shared object that is created by the one who calls the `create_pool` function.
-+ It records its `Balance<A>`, `Balance<B>`, `Supply<LP<A, B>>`, and default fee.
++ It records its `Balance<A>`, `Balance<B>`, `Supply<LP<A, B>>`, ` and default fee.
 
 3. Factory
 + A `Factory` is a global shared object that is created only once during the package publishment.
@@ -22,7 +22,7 @@ A simple Sui Move version AMM Dex based on the logic of srmV1.
 
 4. PoolItem
 + A `PoolItem` is used to record the pool info in the `Factory`.
-+ It guarantees each pair is unique and the coin types it records are sorted.
++ It guarantees each pair is unique and the coin types it records are not sorted to allow for control over coinA. This is a requirement for how the dex functions to ensure rewards are delivered in the correct coinA.
 
 ## Core functions
 1. create_pool<A, B>

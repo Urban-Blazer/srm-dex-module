@@ -186,7 +186,8 @@ module sui_rewards_me::SRMV1 {
     public struct RewardsProcessing has copy, drop {
         pool_id: ID,
         recipient: address,
-        amount: u64
+        amount: u64,
+        timestamp: u64
     }
 
     public struct RewardsDeposited has copy, drop {
@@ -311,7 +312,8 @@ module sui_rewards_me::SRMV1 {
     public entry fun withdraw_rewards<A, B>(
         pool: &mut Pool<A, B>, 
         config: &Config, 
-        amount: u64, 
+        amount: u64,
+        clock: &Clock,
         ctx: &mut TxContext
     ) {
         let caller = sender(ctx);
@@ -327,7 +329,8 @@ module sui_rewards_me::SRMV1 {
         event::emit(RewardsProcessing {
             pool_id: object::id(pool),
             recipient: config.rewards_manager,
-            amount: amount
+            amount: amount,
+            timestamp: get_timestamp(clock)
         });
     }
 
